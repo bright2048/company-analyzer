@@ -41,7 +41,6 @@ interface CompanyInfo {
   // 企查查原始字段名
   Name?: string;
   RegistCapi?: string;
-  RealCapi?: string;
   StartDate?: string;
   Status?: string;
   Industry?: string;
@@ -141,22 +140,28 @@ function extractRiskLevel(
     return "low";
   }
 
+  // 该部分代码是通过搜索缩略版报告内容中的关键字来确定风险等级，这个
+  //存在严重 bug，比如缩略报告中的描述中，包含了“无失信、被执行等信息”，也被识别为高风险。
+  // 3. **法律与合规风险**：
+  //  - “ZHENHUA”商标在第9类被驳回并进入复审，存在品牌使用不确定性；
+  //  - 资质证书信息不完整（全部显示为“undefined”），关键电信业务许可真实性待验证；
+  //  - 无失信、被执行或行政处罚记录，经营状态正常。
   // 回退到原来的文本分析逻辑
   if (!summaryContent) return "medium";
   if (!summaryContent) return "medium";
   const content = summaryContent.toLowerCase();
 
-  // 高风险关键词
-  if (
-    content.includes("高风险") ||
-    content.includes("重大风险") ||
-    content.includes("严重") ||
-    content.includes("注销") ||
-    content.includes("吊销") ||
-    content.includes("失信")
-  ) {
-    return "high";
-  }
+  // // 高风险关键词
+  // if (
+  //   content.includes("高风险") ||
+  //   content.includes("重大风险") ||
+  //   content.includes("严重") ||
+  //   content.includes("注销") ||
+  //   content.includes("吊销") ||
+  //   content.includes("失信")
+  // ) {
+  //   return "high";
+  // }
 
   // 低风险关键词
   if (
@@ -479,6 +484,7 @@ export function SummaryVisuals({
   summaryContent,
 }: SummaryVisualsProps) {
   // 解析企业信息
+
   const info: CompanyInfo = useMemo(() => {
     if (!companyInfo) return {};
     try {
@@ -528,8 +534,8 @@ export function SummaryVisuals({
 
   // 计算雷达图评分（0-100）
   const radarScores = useMemo(() => {
-    // 规模评分：基于注册资本
-    const scaleScore = Math.min(100, (metrics.capital / 10000) * 100);
+    // 规模评分：基于注册资本，500 万以上才算满分
+    const scaleScore = Math.min(100, (metrics.capital / 10000 / 5) * 100);
 
     // 稳定性评分：基于成立年限
     const stabilityScore = Math.min(100, metrics.years * 10);
@@ -547,7 +553,7 @@ export function SummaryVisuals({
     );
 
     // 财务健康：基于实缴资本比例（支持两种字段名）
-    const realCapi = parseCapital(info.RealCapi || info.realCapital);
+    const realCapi = parseCapital(info.RecCap || info.realCapital);
     const financialScore =
       metrics.capital > 0
         ? Math.min(100, (realCapi / metrics.capital) * 100)
@@ -652,6 +658,8 @@ export function SummaryVisuals({
               icon={Banknote}
               label="注册资本"
               value={info.RegistCapi || info.registeredCapital || "未知"}
+              // 添加次级内容
+              subValue={`实缴：${info.realCapital || "未知"}`}
               color="text-green-600"
             />
             <MetricCard

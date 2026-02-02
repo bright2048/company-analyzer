@@ -404,7 +404,7 @@ interface QccCompanyDetail {
   Status: string;
   StartDate: string;
   RegistCapi: string;
-  RealCapi: string;  // 实缴资本
+  RecCap: string;  // 实缴资本
   Address: string;
   Scope: string;
   Industry: string;
@@ -3739,7 +3739,7 @@ async function generateReportAsync(
       status: companyFullInfo.basicInfo.Status,
       establishDate: companyFullInfo.basicInfo.StartDate,
       registeredCapital: companyFullInfo.basicInfo.RegistCapi,
-      realCapital: companyFullInfo.basicInfo.RealCapi,  // 实缴资本
+      realCapital: companyFullInfo.basicInfo.RecCap,  // 实缴资本
       address: companyFullInfo.basicInfo.Address,
       scope: companyFullInfo.basicInfo.Scope,
       industry: companyFullInfo.basicInfo.Industry,
@@ -3905,6 +3905,7 @@ async function generateCompanyReport(
 - 企业状态：${info.Status}
 - 成立日期：${info.StartDate}
 - 注册资本：${info.RegistCapi}
+- 实缴资本：${info.RecCap}
 - 注册地址：${info.Address}
 - 经营范围：${info.Scope}
 - 所属行业：${info.Industry}
