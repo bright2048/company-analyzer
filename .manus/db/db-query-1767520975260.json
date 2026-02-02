@@ -1,0 +1,24 @@
+{
+  "query": "SELECT id, sourceType, apiKey, apiSecret, isEnabled FROM data_source_config;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user sFX9FWkZmjLK5dz.ccfa7874b59b --database YxyVMjsSDzf8h3qborrsTJ --execute SELECT id, sourceType, apiKey, apiSecret, isEnabled FROM data_source_config;",
+  "rows": [
+    {
+      "id": "1",
+      "sourceType": "web",
+      "apiKey": "NULL",
+      "apiSecret": "NULL",
+      "isEnabled": "0"
+    },
+    {
+      "id": "2",
+      "sourceType": "qichacha",
+      "apiKey": "test-app-key-123",
+      "apiSecret": "test-secret-key-456",
+      "isEnabled": "1"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tsourceType\tapiKey\tapiSecret\tisEnabled\n1\tweb\tNULL\tNULL\t0\n2\tqichacha\ttest-app-key-123\ttest-secret-key-456\t1\n",
+  "stderr": "",
+  "execution_time_ms": 1542
+}

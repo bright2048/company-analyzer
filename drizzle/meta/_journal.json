@@ -1,0 +1,69 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1765944737135,
+      "tag": "0000_wise_toad",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1765944871436,
+      "tag": "0001_worried_wiccan",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1766456402394,
+      "tag": "0002_clumsy_cobalt_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1766570648820,
+      "tag": "0003_stale_lord_tyger",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1766978573446,
+      "tag": "0004_slimy_zuras",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1766993824928,
+      "tag": "0005_shocking_emma_frost",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1766999396413,
+      "tag": "0006_whole_omega_flight",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1767089012999,
+      "tag": "0007_demonic_miracleman",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1767144602558,
+      "tag": "0008_tearful_callisto",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "query": "CREATE TABLE IF NOT EXISTS login_logs (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  userId INT NOT NULL,\n  phone VARCHAR(20),\n  userName VARCHAR(255),\n  ipAddress VARCHAR(64),\n  userAgent TEXT,\n  status ENUM('success', 'failed') DEFAULT 'success' NOT NULL,\n  failReason VARCHAR(255),\n  loginTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL\n);",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user sFX9FWkZmjLK5dz.ccfa7874b59b --database YxyVMjsSDzf8h3qborrsTJ --execute CREATE TABLE IF NOT EXISTS login_logs (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  userId INT NOT NULL,\n  phone VARCHAR(20),\n  userName VARCHAR(255),\n  ipAddress VARCHAR(64),\n  userAgent TEXT,\n  status ENUM('success', 'failed') DEFAULT 'success' NOT NULL,\n  failReason VARCHAR(255),\n  loginTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL\n);",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 1682
+}

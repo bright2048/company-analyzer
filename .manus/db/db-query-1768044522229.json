@@ -1,0 +1,45 @@
+{
+  "query": "SELECT id, apiType, apiName, calledAt, NOW() as currentTime FROM api_call_stats ORDER BY calledAt DESC LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user sFX9FWkZmjLK5dz.ccfa7874b59b --database YxyVMjsSDzf8h3qborrsTJ --execute SELECT id, apiType, apiName, calledAt, NOW() as currentTime FROM api_call_stats ORDER BY calledAt DESC LIMIT 5;",
+  "rows": [
+    {
+      "id": "7",
+      "apiType": "llm_report",
+      "apiName": "通义千问-报告生成",
+      "calledAt": "2026-01-07 09:56:33",
+      "currentTime": "2026-01-10 11:28:42"
+    },
+    {
+      "id": "6",
+      "apiType": "qichacha_search",
+      "apiName": "企业模糊搜索",
+      "calledAt": "2026-01-07 09:55:07",
+      "currentTime": "2026-01-10 11:28:42"
+    },
+    {
+      "id": "5",
+      "apiType": "qichacha_search",
+      "apiName": "企业模糊搜索",
+      "calledAt": "2026-01-07 09:55:06",
+      "currentTime": "2026-01-10 11:28:42"
+    },
+    {
+      "id": "2",
+      "apiType": "qichacha_search",
+      "apiName": "企业模糊搜索",
+      "calledAt": "2026-01-07 09:55:06",
+      "currentTime": "2026-01-10 11:28:42"
+    },
+    {
+      "id": "4",
+      "apiType": "qichacha_search",
+      "apiName": "企业模糊搜索",
+      "calledAt": "2026-01-07 09:55:06",
+      "currentTime": "2026-01-10 11:28:42"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tapiType\tapiName\tcalledAt\tcurrentTime\n7\tllm_report\t通义千问-报告生成\t2026-01-07 09:56:33\t2026-01-10 11:28:42\n6\tqichacha_search\t企业模糊搜索\t2026-01-07 09:55:07\t2026-01-10 11:28:42\n5\tqichacha_search\t企业模糊搜索\t2026-01-07 09:55:06\t2026-01-10 11:28:42\n2\tqichacha_search\t企业模糊搜索\t2026-01-07 09:55:06\t2026-01-10 11:28:42\n4\tqichacha_search\t企业模糊搜索\t2026-01-07 09:55:06\t2026-01-10 11:28:42\n",
+  "stderr": "",
+  "execution_time_ms": 1627
+}

@@ -1,0 +1,8 @@
+{
+  "query": "ALTER TABLE users \nADD COLUMN phone varchar(20) UNIQUE AFTER email,\nADD COLUMN password varchar(64) AFTER phone,\nADD COLUMN reportQuota int NOT NULL DEFAULT 50 AFTER role,\nADD COLUMN reportUsed int NOT NULL DEFAULT 0 AFTER reportQuota,\nADD COLUMN preferredLlm varchar(32) DEFAULT 'zhipu' AFTER reportUsed;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user sFX9FWkZmjLK5dz.ccfa7874b59b --database YxyVMjsSDzf8h3qborrsTJ --execute ALTER TABLE users \nADD COLUMN phone varchar(20) UNIQUE AFTER email,\nADD COLUMN password varchar(64) AFTER phone,\nADD COLUMN reportQuota int NOT NULL DEFAULT 50 AFTER role,\nADD COLUMN reportUsed int NOT NULL DEFAULT 0 AFTER reportQuota,\nADD COLUMN preferredLlm varchar(32) DEFAULT 'zhipu' AFTER reportUsed;",
+  "returncode": 1,
+  "logs": [
+    "ERROR 8200 (HY000) at line 1: unsupported add column 'phone' constraint UNIQUE KEY when altering 'YxyVMjsSDzf8h3qborrsTJ.users'"
+  ]
+}

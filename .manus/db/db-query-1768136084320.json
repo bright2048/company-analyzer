@@ -1,0 +1,35 @@
+{
+  "query": "SELECT id, apiName, calledAt FROM api_call_stats ORDER BY id DESC LIMIT 5",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user sFX9FWkZmjLK5dz.ccfa7874b59b --database YxyVMjsSDzf8h3qborrsTJ --execute SELECT id, apiName, calledAt FROM api_call_stats ORDER BY id DESC LIMIT 5",
+  "rows": [
+    {
+      "id": "7",
+      "apiName": "通义千问-报告生成",
+      "calledAt": "2026-01-07 09:56:33"
+    },
+    {
+      "id": "6",
+      "apiName": "企业模糊搜索",
+      "calledAt": "2026-01-07 09:55:07"
+    },
+    {
+      "id": "5",
+      "apiName": "企业模糊搜索",
+      "calledAt": "2026-01-07 09:55:06"
+    },
+    {
+      "id": "4",
+      "apiName": "企业模糊搜索",
+      "calledAt": "2026-01-07 09:55:06"
+    },
+    {
+      "id": "3",
+      "apiName": "企业模糊搜索",
+      "calledAt": "2026-01-07 09:55:06"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tapiName\tcalledAt\n7\t通义千问-报告生成\t2026-01-07 09:56:33\n6\t企业模糊搜索\t2026-01-07 09:55:07\n5\t企业模糊搜索\t2026-01-07 09:55:06\n4\t企业模糊搜索\t2026-01-07 09:55:06\n3\t企业模糊搜索\t2026-01-07 09:55:06\n",
+  "stderr": "",
+  "execution_time_ms": 1536
+}

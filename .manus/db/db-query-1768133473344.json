@@ -1,0 +1,40 @@
+{
+  "query": "SELECT @@global.time_zone, @@session.time_zone, NOW(), UTC_TIMESTAMP(); SELECT id, apiType, apiName, calledAt FROM api_call_stats ORDER BY id DESC LIMIT 3;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user sFX9FWkZmjLK5dz.ccfa7874b59b --database YxyVMjsSDzf8h3qborrsTJ --execute SELECT @@global.time_zone, @@session.time_zone, NOW(), UTC_TIMESTAMP(); SELECT id, apiType, apiName, calledAt FROM api_call_stats ORDER BY id DESC LIMIT 3;",
+  "rows": [
+    {
+      "@@global.time_zone": "SYSTEM",
+      "@@session.time_zone": "SYSTEM",
+      "NOW()": "2026-01-11 12:11:13",
+      "UTC_TIMESTAMP()": "2026-01-11 12:11:13"
+    },
+    {
+      "@@global.time_zone": "id",
+      "@@session.time_zone": "apiType",
+      "NOW()": "apiName",
+      "UTC_TIMESTAMP()": "calledAt"
+    },
+    {
+      "@@global.time_zone": "7",
+      "@@session.time_zone": "llm_report",
+      "NOW()": "通义千问-报告生成",
+      "UTC_TIMESTAMP()": "2026-01-07 09:56:33"
+    },
+    {
+      "@@global.time_zone": "6",
+      "@@session.time_zone": "qichacha_search",
+      "NOW()": "企业模糊搜索",
+      "UTC_TIMESTAMP()": "2026-01-07 09:55:07"
+    },
+    {
+      "@@global.time_zone": "5",
+      "@@session.time_zone": "qichacha_search",
+      "NOW()": "企业模糊搜索",
+      "UTC_TIMESTAMP()": "2026-01-07 09:55:06"
+    }
+  ],
+  "messages": [],
+  "stdout": "@@global.time_zone\t@@session.time_zone\tNOW()\tUTC_TIMESTAMP()\nSYSTEM\tSYSTEM\t2026-01-11 12:11:13\t2026-01-11 12:11:13\nid\tapiType\tapiName\tcalledAt\n7\tllm_report\t通义千问-报告生成\t2026-01-07 09:56:33\n6\tqichacha_search\t企业模糊搜索\t2026-01-07 09:55:07\n5\tqichacha_search\t企业模糊搜索\t2026-01-07 09:55:06\n",
+  "stderr": "",
+  "execution_time_ms": 1791
+}

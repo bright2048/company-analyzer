@@ -1,0 +1,43 @@
+{
+  "query": "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_NAME = 'api_call_stats';",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user sFX9FWkZmjLK5dz.ccfa7874b59b --database YxyVMjsSDzf8h3qborrsTJ --execute SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_NAME = 'api_call_stats';",
+  "rows": [
+    {
+      "COLUMN_NAME": "id"
+    },
+    {
+      "COLUMN_NAME": "apiType"
+    },
+    {
+      "COLUMN_NAME": "apiName"
+    },
+    {
+      "COLUMN_NAME": "status"
+    },
+    {
+      "COLUMN_NAME": "cost"
+    },
+    {
+      "COLUMN_NAME": "companyName"
+    },
+    {
+      "COLUMN_NAME": "reportId"
+    },
+    {
+      "COLUMN_NAME": "requestParams"
+    },
+    {
+      "COLUMN_NAME": "responseSummary"
+    },
+    {
+      "COLUMN_NAME": "errorMessage"
+    },
+    {
+      "COLUMN_NAME": "calledAt"
+    }
+  ],
+  "messages": [],
+  "stdout": "COLUMN_NAME\nid\napiType\napiName\nstatus\ncost\ncompanyName\nreportId\nrequestParams\nresponseSummary\nerrorMessage\ncalledAt\n",
+  "stderr": "",
+  "execution_time_ms": 1513
+}

@@ -1,0 +1,9 @@
+{
+  "query": "CREATE TABLE IF NOT EXISTS qichacha_api_config (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  apiCode VARCHAR(32) NOT NULL UNIQUE,\n  apiName VARCHAR(128) NOT NULL,\n  endpoint VARCHAR(255) NOT NULL,\n  cost VARCHAR(32),\n  description TEXT,\n  method VARCHAR(16) DEFAULT 'GET',\n  primaryParam VARCHAR(64),\n  isEnabled BOOLEAN DEFAULT TRUE NOT NULL,\n  sortOrder INT DEFAULT 0,\n  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,\n  updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP NOT NULL\n);",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user sFX9FWkZmjLK5dz.ccfa7874b59b --database YxyVMjsSDzf8h3qborrsTJ --execute CREATE TABLE IF NOT EXISTS qichacha_api_config (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  apiCode VARCHAR(32) NOT NULL UNIQUE,\n  apiName VARCHAR(128) NOT NULL,\n  endpoint VARCHAR(255) NOT NULL,\n  cost VARCHAR(32),\n  description TEXT,\n  method VARCHAR(16) DEFAULT 'GET',\n  primaryParam VARCHAR(64),\n  isEnabled BOOLEAN DEFAULT TRUE NOT NULL,\n  sortOrder INT DEFAULT 0,\n  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,\n  updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP NOT NULL\n);",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 1733
+}

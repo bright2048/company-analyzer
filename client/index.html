@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <title>企业分析报告生成系统</title>    
+    <!-- THIS IS THE START OF A COMMENT BLOCK, BLOCK TO BE DELETED: Google Fonts here, example:
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    THIS IS THE END OF A COMMENT BLOCK, BLOCK TO BE DELETED -->
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <!-- Umami Analytics - 仅在配置了分析端点时加载 -->
+    <script>
+      (function() {
+        var endpoint = '%VITE_ANALYTICS_ENDPOINT%';
+        var websiteId = '%VITE_ANALYTICS_WEBSITE_ID%';
+        // 只有当环境变量已配置且不为空时才加载分析脚本
+        if (endpoint && endpoint !== '%VITE_ANALYTICS_ENDPOINT%' && endpoint.indexOf('http') === 0) {
+          var script = document.createElement('script');
+          script.defer = true;
+          script.src = endpoint + '/umami';
+          script.setAttribute('data-website-id', websiteId);
+          document.body.appendChild(script);
+        }
+      })();
+    </script>
+  </body>
+
+</html>

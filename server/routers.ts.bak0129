@@ -1,0 +1,4609 @@
+import { COOKIE_NAME } from "@shared/const";
+import { getSessionCookieOptions } from "./_core/cookies";
+import { systemRouter } from "./_core/systemRouter";
+import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { z } from "zod";
+import * as XLSX from "xlsx";
+import { TRPCError } from "@trpc/server";
+import {
+  createParkCompany,
+  createParkCompanies,
+  getParkCompanies,
+  getParkCompanyById,
+  searchParkCompanies,
+  updateParkCompany,
+  deleteParkCompany,
+  getParkCompaniesCount,
+  getAllParkCompanyNames,
+  createCompanyReport,
+  getCompanyReports,
+  getCompanyReportById,
+  updateCompanyReport,
+  deleteCompanyReport,
+  getDataSourceConfigs,
+  getActiveDataSource,
+  upsertDataSourceConfig,
+  setActiveDataSource,
+  createBatchTask,
+  getBatchTasks,
+  getBatchTaskById,
+  updateBatchTask,
+  getBatchTaskReports,
+  deleteBatchTask,
+  getCachedSearchResults,
+  saveSearchResultsToCache,
+  searchCompanyCache,
+  getCacheDays,
+  getCacheStats,
+  recordApiCall,
+  getApiCallStats,
+  getRecentApiCalls,
+  getTodayApiStats,
+  getMonthlyApiStats,
+  // 企查查完整数据缓存相关
+  getQichachaFullDataCache,
+  saveQichachaFullDataCache,
+  updateCacheHitCount,
+  isCacheValid,
+  getQichachaCacheStats,
+  cleanExpiredCache,
+  getAllQichachaCacheRecords,
+  getQichachaCacheByCompanyName,
+  deleteQichachaCache,
+  checkCachedCompanies,
+  // 系统配置相关
+  getSystemConfig,
+  setSystemConfig,
+  getAllSystemConfigs,
+  getCacheDaysConfig,
+  setCacheDaysConfig,
+  // 缓存预热任务相关
+  createCacheWarmupTask,
+  getCacheWarmupTasks,
+  getCacheWarmupTaskById,
+  updateCacheWarmupTask,
+  deleteCacheWarmupTask,
+  // 企查查API配置相关
+  initQichachaApiConfig,
+  getAllQichachaApiConfigs,
+  getQichachaApiConfigByCode,
+  updateQichachaApiConfig,
+  batchUpdateQichachaApiConfigs,
+  resetQichachaApiConfig,
+  getQichachaApiEndpoint,
+  getQichachaApiInfo,
+  // 系统级LLM配置相关
+  saveLlmConfig,
+  getLlmConfig,
+  getAllLlmConfigs,
+  getDefaultLlmConfig,
+  getEnabledLlmProviders,
+  deleteLlmConfig,
+  setDefaultLlmProvider,
+  // 用户认证相关
+  getUserByPhone,
+  verifyUserLogin,
+  createUser,
+  batchCreateUsers,
+  getAllUsers,
+  getUsersCount,
+  updateUser,
+  deleteUser,
+  incrementUserReportUsed,
+  checkUserQuota,
+  resetUserPassword,
+  getUserById,
+  changeUserPassword,
+  rechargeUserQuota,
+  recordLoginLog,
+  getLoginLogs,
+  getUserLoginLogs,
+} from "./db";
+import crypto from "crypto";
+import { invokeLLM } from "./_core/llm";
+import { invokeLLMWithProvider, getLLMProviders, getLLMProviderById, LLMProvider, LLMProviderConfig } from "./llmProviders";
+import type { Message } from "./_core/llm";
+import { storagePut } from "./storage";
+import { nanoid } from "nanoid";
+import { generateWordDocument, generatePdfDocument } from "./reportExport";
+import { logDb, logQcc, logLlm, logReport, logDebug } from "./logger";
+
+// 企查查API签名生成
+function generateQccSign(appKey: string, secretKey: string, timestamp: string): string {
+  const signStr = appKey + timestamp + secretKey;
+  return crypto.createHash('md5').update(signStr).digest('hex').toUpperCase();
+}
+
+// 企查查API基础URL
+const QCC_BASE_URL = 'https://api.qichacha.com';
+
+// 获取企查查API配置（优先从数据库读取，其次从环境变量读取）
+async function getQichachaConfig(): Promise<{ appKey: string; secretKey: string } | null> {
+  try {
+    // 1. 检查当前启用的数据源是否是企查查
+    const activeSource = await getActiveDataSource();
+    if (activeSource?.sourceType !== 'qichacha') {
+      console.log('[QCC] Data source is not qichacha, current:', activeSource?.sourceType || 'web');
+      return null;
+    }
+
+    // 2. 从数据库读取企查查配置
+    const configs = await getDataSourceConfigs();
+    const qccConfig = configs.find(c => c.sourceType === 'qichacha');
+
+    if (qccConfig && qccConfig.apiKey && qccConfig.apiSecret) {
+      console.log('[QCC] Using config from database');
+      return {
+        appKey: qccConfig.apiKey,
+        secretKey: qccConfig.apiSecret,
+      };
+    }
+
+    // 3. 其次从环境变量读取
+    const envAppKey = process.env.QICHACHA_APP_KEY;
+    const envSecretKey = process.env.QICHACHA_SECRET_KEY;
+
+    if (envAppKey && envSecretKey) {
+      console.log('[QCC] Using config from environment variables');
+      return {
+        appKey: envAppKey,
+        secretKey: envSecretKey,
+      };
+    }
+
+    console.log('[QCC] No config found in database or environment');
+    return null;
+  } catch (error) {
+    console.error('[QCC] Error getting config:', error);
+
+    // 数据库读取失败时，尝试从环境变量读取
+    const envAppKey = process.env.QICHACHA_APP_KEY;
+    const envSecretKey = process.env.QICHACHA_SECRET_KEY;
+
+    if (envAppKey && envSecretKey) {
+      return {
+        appKey: envAppKey,
+        secretKey: envSecretKey,
+      };
+    }
+
+    return null;
+  }
+}
+
+/**
+ * 通用企查查API调用函数
+ * 从数据库读取API端点配置，然后拼接URL调用
+ * 
+ * @param apiCode API代码（如417、730、731等）
+ * @param params 请求参数（不含基础参数key）
+ * @returns API响应数据
+ */
+async function callQichachaApiGeneric(
+  apiCode: string,
+  params: Record<string, string>
+): Promise<{ success: boolean; data?: unknown; error?: string; httpStatus?: number; apiStatus?: string }> {
+  // 获取基础配置
+  const config = await getQichachaConfig();
+  if (!config) {
+    return { success: false, error: 'API not configured' };
+  }
+
+  // 获取API配置
+  const apiConfig = await getQichachaApiConfigByCode(apiCode);
+  if (!apiConfig) {
+    await logQcc(`API配置未找到: ${apiCode}`);
+    return { success: false, error: `API config not found: ${apiCode}` };
+  }
+
+  if (!apiConfig.isEnabled) {
+    await logQcc(`API ${apiCode} (${apiConfig.apiName}) 已禁用`);
+    return { success: false, error: `API disabled: ${apiConfig.apiName}` };
+  }
+
+  const { appKey, secretKey } = config;
+
+  let httpStatus = 0;
+  let responseText = '';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 构建请求URL
+    const queryParams = new URLSearchParams({ key: appKey, ...params });
+    const url = `${QCC_BASE_URL}/${apiConfig.endpoint}?${queryParams.toString()}`;
+
+    await logQcc(`调用API ${apiCode} (${apiConfig.apiName})`, { url: url.replace(appKey, '***'), params });
+
+    const response = await fetch(url, {
+      headers: {
+        'Token': sign,
+        'Timespan': timestamp,
+      },
+    });
+
+    httpStatus = response.status;
+    responseText = await response.text();
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      const errorDetail = `JSON解析失败 | HTTP状态码: ${httpStatus}`;
+      await logQcc(`API ${apiCode} 响应解析失败`, { httpStatus, rawResponse: responseText.substring(0, 500) });
+      return { success: false, error: errorDetail, httpStatus };
+    }
+
+    await logQcc(`API ${apiCode} 响应`, { httpStatus, apiStatus: data.Status, message: data.Message });
+
+    if (data.Status === '200') {
+      return { success: true, data: data.Result, httpStatus, apiStatus: data.Status };
+    }
+
+    // API返回非200状态，记录详细错误信息
+    const errorDetail = `错误码: ${data.Status} | 错误信息: ${data.Message || '无'} | HTTP状态码: ${httpStatus}`;
+    await logQcc(`API ${apiCode} 调用失败`, { errorDetail, rawResponse: responseText.substring(0, 500) });
+    return { success: false, error: errorDetail, httpStatus, apiStatus: data.Status };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const errorDetail = `异常类型: ${error instanceof Error ? error.constructor.name : 'Unknown'} | 错误信息: ${errorMsg} | HTTP状态码: ${httpStatus || '未知'}`;
+    await logQcc(`API ${apiCode} 调用异常`, { errorDetail, httpStatus, rawResponse: responseText?.substring(0, 500) });
+    return { success: false, error: errorDetail, httpStatus: httpStatus || undefined };
+  }
+}
+
+// 企查查API返回结果类型
+interface QccCompanyResult {
+  name: string;
+  creditCode: string;
+  legalPerson?: string;
+  status?: string;
+  establishDate?: string;
+  registeredCapital?: string;
+  address?: string;
+}
+
+// 调用企查查企业模糊搜索API (ApiCode: 417)
+async function callQichachaApi(keyword: string): Promise<QccCompanyResult[]> {
+  // 优先从数据库读取配置，其次从环境变量读取
+  const config = await getQichachaConfig();
+
+  // 如果没有配置API密钥，返回空数组
+  if (!config) {
+    console.log('[QCC] API not configured, skipping');
+    return [];
+  }
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('417');
+  const endpoint = apiConfig?.endpoint || 'FuzzySearch/GetList';
+  const apiCost = apiConfig?.cost || '0.10';
+
+  let httpStatus = 0;
+  let responseText = '';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&searchKey=${encodeURIComponent(keyword)}`;
+
+    const response = await fetch(url, {
+      headers: {
+        'Token': sign,
+        'Timespan': timestamp,
+      },
+    });
+
+    httpStatus = response.status;
+    responseText = await response.text();
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      // JSON解析失败，记录原始响应
+      console.error('[QCC Search] JSON parse error, raw response:', responseText.substring(0, 500));
+      await recordApiCall({
+        apiType: 'qichacha_search',
+        apiName: apiConfig?.apiName || '企业模糊搜索',
+        status: 'failed',
+        cost: apiCost,
+        companyName: keyword,
+        requestParams: JSON.stringify({ keyword, endpoint }),
+        errorMessage: `JSON解析失败 | HTTP状态码: ${httpStatus}`,
+        responseSummary: JSON.stringify({ httpStatus, rawResponse: responseText.substring(0, 1000) }),
+      });
+      return [];
+    }
+
+    console.log('[QCC Search] HTTP Status:', httpStatus, 'API Status:', data.Status, 'Message:', data.Message);
+
+    if (data.Status === '200' && data.Result && Array.isArray(data.Result)) {
+      // 记录API调用成功
+      await recordApiCall({
+        apiType: 'qichacha_search',
+        apiName: apiConfig?.apiName || '企业模糊搜索',
+        status: 'success',
+        cost: apiCost,
+        companyName: keyword,
+        requestParams: JSON.stringify({ keyword, endpoint }),
+        responseSummary: JSON.stringify({ count: data.Result.length, httpStatus }),
+      });
+
+      return data.Result.map((item: {
+        Name?: string;
+        CreditCode?: string;
+        OperName?: string;
+        Status?: string;
+        StartDate?: string;
+        RegistCapi?: string;
+        Address?: string;
+      }) => ({
+        name: item.Name || '',
+        creditCode: item.CreditCode || '',
+        legalPerson: item.OperName,
+        status: item.Status,
+        establishDate: item.StartDate,
+        registeredCapital: item.RegistCapi,
+        address: item.Address,
+      })).filter((c: QccCompanyResult) => c.name && c.creditCode);
+    }
+
+    // API返回非200状态，记录详细错误信息
+    const errorDetail = `错误码: ${data.Status} | 错误信息: ${data.Message || '无'} | HTTP状态码: ${httpStatus}`;
+    console.error('[QCC Search] API Error:', errorDetail);
+
+    await recordApiCall({
+      apiType: 'qichacha_search',
+      apiName: apiConfig?.apiName || '企业模糊搜索',
+      status: 'failed',
+      cost: apiCost,
+      companyName: keyword,
+      requestParams: JSON.stringify({ keyword, endpoint }),
+      errorMessage: errorDetail,
+      responseSummary: JSON.stringify({
+        httpStatus,
+        apiStatus: data.Status,
+        apiMessage: data.Message,
+        rawResponse: responseText.substring(0, 500)
+      }),
+    });
+
+    return [];
+  } catch (error) {
+    // 网络错误或其他异常
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const errorDetail = `异常类型: ${error instanceof Error ? error.constructor.name : 'Unknown'} | 错误信息: ${errorMsg} | HTTP状态码: ${httpStatus || '未知'}`;
+    console.error('[QCC Search] API call failed:', errorDetail, error);
+
+    await recordApiCall({
+      apiType: 'qichacha_search',
+      apiName: apiConfig?.apiName || '企业模糊搜索',
+      status: 'failed',
+      companyName: keyword,
+      requestParams: JSON.stringify({ keyword, endpoint }),
+      errorMessage: errorDetail,
+      responseSummary: httpStatus ? JSON.stringify({ httpStatus, rawResponse: responseText?.substring(0, 500) }) : undefined,
+    });
+
+    return [];
+  }
+}
+
+// 调用企查查企业工商信息详情API
+interface QccCompanyDetail {
+  Name: string;
+  CreditCode: string;
+  OperName: string;
+  Status: string;
+  StartDate: string;
+  RegistCapi: string;
+  RealCapi: string;  // 实缴资本
+  Address: string;
+  Scope: string;
+  Industry: string;
+  Province: string;
+  City: string;
+  District: string;
+  EconKind: string;
+  TermStart: string;
+  TermEnd: string;
+  CheckDate: string;
+  OrgNo: string;
+  TaxNo: string;
+}
+
+// 调用企查查企业工商信息API (ApiCode: 410)
+async function callQichachaDetailApi(creditCode: string): Promise<QccCompanyDetail | null> {
+  // 优先从数据库读取配置，其次从环境变量读取
+  const config = await getQichachaConfig();
+
+  if (!config) {
+    console.log('[QCC] API not configured, skipping detail');
+    return null;
+  }
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('410');
+  const endpoint = apiConfig?.endpoint || 'ECIV4/GetBasicDetailsByName';
+  const apiCost = apiConfig?.cost || '0.20';
+  const paramName = apiConfig?.primaryParam || 'keyword';
+
+  let httpStatus = 0;
+  let responseText = '';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点和参数名
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}`;
+
+    const response = await fetch(url, {
+      headers: {
+        'Token': sign,
+        'Timespan': timestamp,
+      },
+    });
+
+    httpStatus = response.status;
+    responseText = await response.text();
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      // JSON解析失败，记录原始响应
+      console.error('[QCC Detail] JSON parse error, raw response:', responseText.substring(0, 500));
+      await recordApiCall({
+        apiType: 'qichacha_detail',
+        apiName: apiConfig?.apiName || '企业工商详情',
+        status: 'failed',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, endpoint }),
+        errorMessage: `JSON解析失败 | HTTP状态码: ${httpStatus}`,
+        responseSummary: JSON.stringify({ httpStatus, rawResponse: responseText.substring(0, 1000) }),
+      });
+      return null;
+    }
+
+    console.log('[QCC Detail] HTTP Status:', httpStatus, 'API Status:', data.Status, 'Message:', data.Message, 'Has Result:', !!data.Result);
+    if (data.Result) {
+      console.log('[QCC Detail] Result Name:', data.Result.Name, 'CreditCode:', data.Result.CreditCode);
+    }
+
+    if (data.Status === '200' && data.Result) {
+      await recordApiCall({
+        apiType: 'qichacha_detail',
+        apiName: apiConfig?.apiName || '企业工商信息',
+        status: 'success',
+        cost: apiCost,
+        companyName: data.Result.Name,
+        requestParams: JSON.stringify({ creditCode, endpoint }),
+        responseSummary: JSON.stringify({ name: data.Result.Name, httpStatus }),
+      });
+      return data.Result;
+    }
+
+    // API返回非200状态，记录详细错误信息
+    const errorDetail = `错误码: ${data.Status} | 错误信息: ${data.Message || '无'} | HTTP状态码: ${httpStatus}`;
+    console.error('[QCC Detail] API Error:', errorDetail);
+
+    await recordApiCall({
+      apiType: 'qichacha_detail',
+      apiName: apiConfig?.apiName || '企业工商详情',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: errorDetail,
+      responseSummary: JSON.stringify({
+        httpStatus,
+        apiStatus: data.Status,
+        apiMessage: data.Message,
+        rawResponse: responseText.substring(0, 500)
+      }),
+    });
+
+    return null;
+  } catch (error) {
+    // 网络错误或其他异常
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const errorDetail = `异常类型: ${error instanceof Error ? error.constructor.name : 'Unknown'} | 错误信息: ${errorMsg} | HTTP状态码: ${httpStatus || '未知'}`;
+    console.error('[QCC Detail] API call failed:', errorDetail, error);
+
+    await recordApiCall({
+      apiType: 'qichacha_detail',
+      apiName: apiConfig?.apiName || '企业工商详情',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: errorDetail,
+      responseSummary: httpStatus ? JSON.stringify({ httpStatus, rawResponse: responseText?.substring(0, 500) }) : undefined,
+    });
+    return null;
+  }
+}
+
+// 调用企查查企业股东信息API
+interface QccShareholder {
+  StockName: string;
+  StockType: string;
+  StockPercent: string;
+  ShouldCapi: string;
+  ShoudDate: string;
+  InvestType: string;
+  InvestName: string;
+}
+
+// 调用企查查企业股东信息API (ApiCode: 731)
+async function callQichachaShareholderApi(creditCode: string): Promise<QccShareholder[]> {
+  // 优先从数据库读取配置，其次从环境变量读取
+  const config = await getQichachaConfig();
+
+  if (!config) {
+    return [];
+  }
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('731');
+  const endpoint = apiConfig?.endpoint || 'ECIPartner/GetList';
+  const apiCost = apiConfig?.cost || '0.10';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}`;
+    const response = await fetch(url, {
+      headers: {
+        'Token': sign,
+        'Timespan': timestamp,
+      },
+    });
+
+    const data = await response.json();
+
+    // 官方文档确认: Result直接是数组，不是Result.PartnerList
+    console.log('[QCC Shareholder] API Response Status:', data.Status, 'Result type:', typeof data.Result, 'Is Array:', Array.isArray(data.Result));
+    if (data.Status === '200' && data.Result && Array.isArray(data.Result)) {
+      await recordApiCall({
+        apiType: 'qichacha_shareholder',
+        apiName: apiConfig?.apiName || '股东信息',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, endpoint }),
+        responseSummary: JSON.stringify({ count: data.Result.length }),
+      });
+      return data.Result;
+    }
+
+    // 记录失败原因
+    console.log('[QCC Shareholder] API Failed - Status:', data.Status, 'Message:', data.Message);
+    console.log('[QCC Shareholder] Full response:', JSON.stringify(data).substring(0, 500));
+
+    await recordApiCall({
+      apiType: 'qichacha_shareholder',
+      apiName: apiConfig?.apiName || '股东信息',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+
+    return [];
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_shareholder',
+      apiName: apiConfig?.apiName || '股东信息',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return [];
+  }
+}
+
+// 调用企查查企业高管信息API
+interface QccExecutive {
+  Name: string;
+  Job: string;
+}
+
+// 调用企查查企业高管信息API (ApiCode: 732)
+async function callQichachaExecutiveApi(creditCode: string): Promise<QccExecutive[]> {
+  // 优先从数据库读取配置，其次从环境变量读取
+  const config = await getQichachaConfig();
+
+  if (!config) {
+    return [];
+  }
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('732');
+  const endpoint = apiConfig?.endpoint || 'ECIEmployee/GetList';
+  const apiCost = apiConfig?.cost || '0.10';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}`;
+
+    const response = await fetch(url, {
+      headers: {
+        'Token': sign,
+        'Timespan': timestamp,
+      },
+    });
+
+    const data = await response.json();
+
+    // 官方文档确认: Result直接是数组，不是Result.EmployeeList
+    console.log('[QCC Executive] API Response Status:', data.Status, 'Result type:', typeof data.Result, 'Is Array:', Array.isArray(data.Result));
+    if (data.Status === '200' && data.Result && Array.isArray(data.Result)) {
+      await recordApiCall({
+        apiType: 'qichacha_executive',
+        apiName: apiConfig?.apiName || '高管信息',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, endpoint }),
+        responseSummary: JSON.stringify({ count: data.Result.length }),
+      });
+      return data.Result;
+    }
+
+    // 记录失败原因
+    console.log('[QCC Executive] API Failed - Status:', data.Status, 'Message:', data.Message);
+    console.log('[QCC Executive] Full response:', JSON.stringify(data).substring(0, 500));
+
+    await recordApiCall({
+      apiType: 'qichacha_executive',
+      apiName: apiConfig?.apiName || '高管信息',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+
+    return [];
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_executive',
+      apiName: apiConfig?.apiName || '高管信息',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return [];
+  }
+}
+
+// ============ 新增企查查API接口 ============
+
+// 专利查询API (ApiCode: 514)
+interface QccPatent {
+  Title: string;           // 专利名称
+  PatentType: string;      // 专利类型（发明专利/实用新型/外观设计）
+  ApplicationNumber: string; // 申请号
+  ApplicationDate: string; // 申请日期
+  PublicationNumber: string; // 公开号
+  PublicationDate: string; // 公开日期
+  LegalStatus: string;     // 法律状态
+  Inventor: string;        // 发明人
+  Agency: string;          // 代理机构
+  Abstract: string;        // 摘要
+}
+
+// 专利查询API (ApiCode: 514)
+async function callQichachaPatentApi(creditCode: string, pageIndex: number = 1, pageSize: number = 20): Promise<{ total: number; list: QccPatent[] }> {
+  const config = await getQichachaConfig();
+  if (!config) return { total: 0, list: [] };
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('514');
+  const endpoint = apiConfig?.endpoint || 'PatentV4/SearchMultiPatents';
+  const apiCost = apiConfig?.cost || '0.30';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}&pageIndex=${pageIndex}&pageSize=${pageSize}`;
+
+    const response = await fetch(url, {
+      headers: { 'Token': sign, 'Timespan': timestamp },
+    });
+
+    const data = await response.json();
+
+    if (data.Status === '200') {
+      // PatentV4/SearchMultiPatents 接口返回结构：
+      // { Paging: { TotalRecords: N }, Result: [...] }
+      // 兼容旧结构：{ Result: { Total: N, Data: [...] } }
+      let total = 0;
+      let list: any[] = [];
+
+      if (data.Paging && Array.isArray(data.Result)) {
+        // 新结构：PatentV4/SearchMultiPatents
+        total = data.Paging.TotalRecords || data.Result.length;
+        list = data.Result.map((item: any) => ({
+          Title: item.Title || '',
+          PatentType: item.KindCodeDesc || '',
+          ApplicationNumber: item.ApplicationNumber || '',
+          ApplicationDate: item.ApplicationDate || '',
+          PublicationNumber: item.PublicationNumber || '',
+          PublicationDate: item.PublicationDate || '',
+          LegalStatus: item.LegalStatusDesc || '',
+          Inventor: Array.isArray(item.InventorStringList) ? item.InventorStringList.join('、') : '',
+          Agency: Array.isArray(item.Agency) ? item.Agency.join('、') : '',
+          Abstract: '',  // 该接口不返回摘要
+          IPCDesc: Array.isArray(item.IPCDesc) ? item.IPCDesc.join('、') : '',
+        }));
+      } else if (data.Result && data.Result.Data) {
+        // 旧结构：PatentV4/Search
+        total = data.Result.Total || 0;
+        list = data.Result.Data || [];
+      }
+
+      await recordApiCall({
+        apiType: 'qichacha_patent',
+        apiName: apiConfig?.apiName || '专利查询',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, pageIndex, pageSize, endpoint }),
+        responseSummary: JSON.stringify({ total, listCount: list.length }),
+      });
+      return { total, list };
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_patent',
+      apiName: apiConfig?.apiName || '专利查询',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+    return { total: 0, list: [] };
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_patent',
+      apiName: apiConfig?.apiName || '专利查询',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return { total: 0, list: [] };
+  }
+}
+
+// 商标查询API (ApiCode: 231)
+interface QccTrademark {
+  Name: string;            // 商标名称
+  RegNo: string;           // 注册号
+  IntCls: string;          // 国际分类
+  Status: string;          // 商标状态
+  AppDate: string;         // 申请日期
+  RegDate: string;         // 注册日期
+  ImageUrl: string;        // 商标图片
+  FlowList: { Date: string; Status: string }[]; // 流程信息
+}
+
+// 商标查询API (ApiCode: 231)
+async function callQichachaTrademarkApi(creditCode: string, pageIndex: number = 1, pageSize: number = 20): Promise<{ total: number; list: QccTrademark[] }> {
+  const config = await getQichachaConfig();
+  if (!config) return { total: 0, list: [] };
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('231');
+  const endpoint = apiConfig?.endpoint || 'tm/SearchByApplicant';  // 修正端点为正确值
+  const apiCost = apiConfig?.cost || '0.30';
+  const paramName = apiConfig?.primaryParam || 'keyword';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}&pageIndex=${pageIndex}&pageSize=${pageSize}`;
+
+    const response = await fetch(url, {
+      headers: { 'Token': sign, 'Timespan': timestamp },
+    });
+
+    const data = await response.json();
+
+    if (data.Status === '200' && data.Result) {
+      // 根据真实API返回格式：tm/SearchByApplicant 接口
+      // { Paging: { TotalRecords: N }, Result: [...] }
+      const total = data.Paging?.TotalRecords || data.Result.length || 0;
+
+      // 直接使用Result数组作为商标列表
+      const list: QccTrademark[] = data.Result.map((item: any) => ({
+        Name: item.Name || '',                      // 商标名称
+        RegNo: item.RegNo || '',                    // 注册号
+        IntCls: item.CategoryId?.toString() || item.IntClass || '',  // 国际分类
+        Status: item.FlowStatusDesc || item.Status || '',           // 商标状态
+        AppDate: item.AppDate || '',                // 申请日期
+        RegDate: item.RegDate || '',                // 注册日期
+        ImageUrl: item.ImageUrl || '',              // 商标图片
+        FlowList: item.FlowList || item.Flow ? [{ Date: '', Status: item.Flow }] : [], // 流程信息
+      }));
+
+      await recordApiCall({
+        apiType: 'qichacha_trademark',
+        apiName: apiConfig?.apiName || '商标查询',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, pageIndex, pageSize, endpoint }),
+        responseSummary: JSON.stringify({ total, listCount: list.length }),
+      });
+      return { total, list };
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_trademark',
+      apiName: apiConfig?.apiName || '商标查询',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+    return { total: 0, list: [] };
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_trademark',
+      apiName: apiConfig?.apiName || '商标查询',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return { total: 0, list: [] };
+  }
+}
+
+
+// // 商标查询API (ApiCode: 231)
+// async function callQichachaTrademarkApi(creditCode: string, pageIndex: number = 1, pageSize: number = 20): Promise<{ total: number; list: QccTrademark[] }> {
+//   const config = await getQichachaConfig();
+//   if (!config) return { total: 0, list: [] };
+
+//   const { appKey, secretKey } = config;
+
+//   // 从数据库获取API端点配置
+//   const apiConfig = await getQichachaApiConfigByCode('231');
+//   const endpoint = apiConfig?.endpoint || 'tm/SearchByApplicant';
+//   const apiCost = apiConfig?.cost || '0.30';
+//   const paramName = apiConfig?.primaryParam || 'keyword';
+
+//   try {
+//     const timestamp = Math.floor(Date.now() / 1000).toString();
+//     const sign = generateQccSign(appKey, secretKey, timestamp);
+
+//     // 使用数据库配置的端点
+//     const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}&pageIndex=${pageIndex}&pageSize=${pageSize}`;
+
+//     const response = await fetch(url, {
+//       headers: { 'Token': sign, 'Timespan': timestamp },
+//     });
+
+//     const data = await response.json();
+
+//     if (data.Status === '200' && data.Result) {
+//       await recordApiCall({
+//         apiType: 'qichacha_trademark',
+//         apiName: apiConfig?.apiName || '商标查询',
+//         status: 'success',
+//         cost: apiCost,
+//         requestParams: JSON.stringify({ creditCode, pageIndex, pageSize, endpoint }),
+//         responseSummary: JSON.stringify({ total: data.Result.Total || 0 }),
+//       });
+//       return {
+//         total: data.Result.Total || 0,
+//         list: data.Result.Data || [],
+//       };
+//     }
+
+//     await recordApiCall({
+//       apiType: 'qichacha_trademark',
+//       apiName: apiConfig?.apiName || '商标查询',
+//       status: 'failed',
+//       cost: apiCost,
+//       requestParams: JSON.stringify({ creditCode, endpoint }),
+//       errorMessage: data.Message || 'Unknown error',
+//     });
+//     return { total: 0, list: [] };
+//   } catch (error) {
+//     await recordApiCall({
+//       apiType: 'qichacha_trademark',
+//       apiName: apiConfig?.apiName || '商标查询',
+//       status: 'failed',
+//       requestParams: JSON.stringify({ creditCode, endpoint }),
+//       errorMessage: error instanceof Error ? error.message : 'Unknown error',
+//     });
+//     return { total: 0, list: [] };
+//   }
+// }
+
+// 著作权软著查询API (ApiCode: 233)
+interface QccCopyright {
+  Category: string;        // 作品类别 (如：美术)
+  Name: string;            // 软件/作品名称
+  Owner: string;           // 权利人
+  RegisterNo: string;      // 登记号
+  RegisterDate: string;    // 登记日期
+  FinishDate: string;      // 完成日期  
+  PublishDate: string;     // 发布日期
+}
+
+// 著作权软著查询API (ApiCode: 233)
+async function callQichachaCopyrightApi(creditCode: string, pageIndex: number = 1, pageSize: number = 20): Promise<{ total: number; list: QccCopyright[] }> {
+  const config = await getQichachaConfig();
+  if (!config) return { total: 0, list: [] };
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('233');
+  const endpoint = apiConfig?.endpoint || 'CopyRight/SearchCopyRight';
+  const apiCost = apiConfig?.cost || '0.30';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}&pageIndex=${pageIndex}&pageSize=${pageSize}`;
+
+    const response = await fetch(url, {
+      headers: { 'Token': sign, 'Timespan': timestamp },
+    });
+
+    const data = await response.json();
+
+    if (data.Status === '200' && data.Result) {
+      // 修正：从Paging中获取总数，Result是数组
+      const total = data.Paging?.TotalRecords || data.Result?.length || 0;
+
+      await recordApiCall({
+        apiType: 'qichacha_copyright',
+        apiName: apiConfig?.apiName || '著作权软著查询',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, pageIndex, pageSize, endpoint }),
+        responseSummary: JSON.stringify({ total }),
+      });
+
+      return {
+        total,
+        list: data.Result || [], // Result直接是数组
+      };
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_copyright',
+      apiName: apiConfig?.apiName || '著作权软著查询',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+    return { total: 0, list: [] };
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_copyright',
+      apiName: apiConfig?.apiName || '著作权软著查询',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return { total: 0, list: [] };
+  }
+}
+
+// 客户查询API (ApiCode: 723)
+interface QccCustomer {
+  CustomerName: string;    // 客户名称
+  Ratio: string;           // 销售占比
+  Amount: string;          // 销售金额
+  Year: string;            // 年份
+  DataSource: string;      // 数据来源
+}
+
+// 客户查询API (ApiCode: 723)
+async function callQichachaCustomerApi(creditCode: string): Promise<QccCustomer[]> {
+  const config = await getQichachaConfig();
+  if (!config) return [];
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('723');
+  const endpoint = apiConfig?.endpoint || 'Customer/GetList';
+  const apiCost = apiConfig?.cost || '0.50';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}`;
+
+    const response = await fetch(url, {
+      headers: { 'Token': sign, 'Timespan': timestamp },
+    });
+
+    const data = await response.json();
+
+    if (data.Status === '200' && data.Result && Array.isArray(data.Result.ClientList)) {
+      // 修正：从 Result.ClientList 中提取数据
+      const clientList = data.Result.ClientList.map((client: any) => ({
+        CustomerName: client.Name || '',      // 客户名称对应 Name 字段
+        Ratio: client.SalesPercent || '',     // 销售占比对应 SalesPercent 字段
+        Amount: client.SalesAmount || '',     // 销售金额对应 SalesAmount 字段
+        Year: client.Year || '',              // 年份对应 Year 字段
+        DataSource: client.Source || ''       // 数据来源对应 Source 字段
+      }));
+
+      await recordApiCall({
+        apiType: 'qichacha_customer',
+        apiName: apiConfig?.apiName || '客户查询',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, endpoint }),
+        responseSummary: JSON.stringify({ count: clientList.length }),
+      });
+
+      return clientList;
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_customer',
+      apiName: apiConfig?.apiName || '客户查询',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+    return [];
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_customer',
+      apiName: apiConfig?.apiName || '客户查询',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return [];
+  }
+}
+
+// 供应商查询API (ApiCode: 724)
+interface QccSupplier {
+  SupplierName: string;    // 供应商名称 (来自 Name 字段)
+  Ratio: string;           // 采购占比 (来自 PurchasePercent 字段)
+  Amount: string;          // 采购金额 (来自 PurchaseAmount 字段)
+  Year: string;            // 年份
+  DataSource: string;      // 数据来源 (来自 Source 字段)
+  KeyNo?: string;          // 供应商唯一标识
+  ImageUrl?: string;       // 供应商头像/Logo地址
+  Relationship?: string;   // 关系描述
+}
+
+// 供应商查询API (ApiCode: 724)
+async function callQichachaSupplierApi(creditCode: string): Promise<QccSupplier[]> {
+  const config = await getQichachaConfig();
+  if (!config) return [];
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('724');
+  const endpoint = apiConfig?.endpoint || 'Supplier/GetList';
+  const apiCost = apiConfig?.cost || '0.50';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}`;
+
+    const response = await fetch(url, {
+      headers: { 'Token': sign, 'Timespan': timestamp },
+    });
+
+    const data = await response.json();
+
+    if (data.Status === '200' && data.Result && Array.isArray(data.Result.DistributorList)) {
+      // 修正：从 Result.DistributorList 中提取数据
+      const supplierList = data.Result.DistributorList.map((supplier: any) => ({
+        SupplierName: supplier.Name || '',      // 供应商名称对应 Name 字段
+        Ratio: supplier.PurchasePercent || '',  // 采购占比对应 PurchasePercent 字段
+        Amount: supplier.PurchaseAmount || '',  // 采购金额对应 PurchaseAmount 字段
+        Year: supplier.Year || '',              // 年份对应 Year 字段
+        DataSource: supplier.Source || ''       // 数据来源对应 Source 字段
+      }));
+
+      await recordApiCall({
+        apiType: 'qichacha_supplier',
+        apiName: apiConfig?.apiName || '供应商查询',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, endpoint }),
+        responseSummary: JSON.stringify({ count: supplierList.length }),
+      });
+      return supplierList;
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_supplier',
+      apiName: apiConfig?.apiName || '供应商查询',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+    return [];
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_supplier',
+      apiName: apiConfig?.apiName || '供应商查询',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return [];
+  }
+}
+
+// 企业年报信息API (ApiCode: 213)
+// 社保信息结构
+interface QccSocialSecurityInfo {
+  UrbanBasicIns: string;           // 城镇职工基本养老保险参保人数
+  EmployeeBasicIns: string;        // 职工基本医疗保险参保人数
+  MaternityIns: string;            // 生育保险参保人数
+  UnemploymentIns: string;         // 失业保险参保人数
+  IndustrialInjuryIns: string;     // 工伤保险参保人数
+}
+
+interface QccAnnualReport {
+  Year: string;            // 年报年份
+  TotalAssets: string;     // 资产总额
+  TotalEquity: string;     // 所有者权益
+  TotalSales: string;      // 营业总收入
+  TotalProfit: string;     // 利润总额
+  NetProfit: string;       // 净利润
+  TotalTax: string;        // 纳税总额
+  TotalLiability: string;  // 负债总额
+  SocialSecurityInfo: QccSocialSecurityInfo; // 社保信息（包含参保人数）- 代码字段
+  SocialInsurance: QccSocialSecurityInfo; // 社保信息 - API实际返回字段
+  SocialSecurityNum: string; // 社保人数（兼容旧字段）
+  WebsiteInfos: { Name: string; Website: string }[]; // 网站信息 - 代码字段
+  WebSiteList: { No: number; Type: string; Name: string; WebSite: string }[]; // 网站信息 - API实际返回字段
+  PartnerInfos: { Name: string; Amount: string; Percent: string }[]; // 股东出资信息
+}
+
+// 企业年报信息API (ApiCode: 213)
+async function callQichachaAnnualReportApi(creditCode: string): Promise<QccAnnualReport[]> {
+  const config = await getQichachaConfig();
+  if (!config) return [];
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('213');
+  const endpoint = apiConfig?.endpoint || 'AR/GetAnnualReport';
+  const apiCost = apiConfig?.cost || '1.00';
+  const paramName = apiConfig?.primaryParam || 'keyNo';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}`;
+
+    const response = await fetch(url, {
+      headers: { 'Token': sign, 'Timespan': timestamp },
+    });
+
+    const data = await response.json();
+
+    if (data.Status === '200' && data.Result && Array.isArray(data.Result)) {
+      await recordApiCall({
+        apiType: 'qichacha_annual_report',
+        apiName: apiConfig?.apiName || '企业年报信息',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, endpoint }),
+        responseSummary: JSON.stringify({ count: data.Result.length }),
+      });
+      return data.Result;
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_annual_report',
+      apiName: apiConfig?.apiName || '企业年报信息',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+    return [];
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_annual_report',
+      apiName: apiConfig?.apiName || '企业年报信息',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return [];
+  }
+}
+
+// 资质证书API (ApiCode: 255)
+interface QccCertificate {
+  Id: string;              // 证书ID
+  Name: string;            // 证书名称
+  Type: string;            // 证书类型代码
+  StartDate: string;       // 生效日期
+  EndDate: string;         // 失效日期
+  No: string;              // 证书编号
+  TypeDesc: string;        // 证书类型描述
+  InstitutionList: string[] | null; // 发证机构列表
+  Status: string;          // 证书状态
+}
+
+// 资质证书API (ApiCode: 255)
+async function callQichachaCertificateApi(creditCode: string, pageIndex: number = 1, pageSize: number = 20): Promise<{ total: number; list: QccCertificate[] }> {
+  const config = await getQichachaConfig();
+  if (!config) return { total: 0, list: [] };
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('255');
+  const endpoint = apiConfig?.endpoint || 'ECICertification/SearchCertification';
+  const apiCost = apiConfig?.cost || '0.30';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}&pageIndex=${pageIndex}&pageSize=${pageSize}`;
+    console.log(`Calling Qichacha API（资质证书 255）: ${url}`);
+
+    const response = await fetch(url, {
+      headers: { 'Token': sign, 'Timespan': timestamp },
+    });
+
+    const data = await response.json();
+
+    if (data.Status === '200' && data.Result) {
+      // 根据API实际返回结构调整：Result是数组，总数从Paging中获取
+      const total = data.Paging?.TotalRecords || data.Result?.length || 0;
+
+      await recordApiCall({
+        apiType: 'qichacha_certificate',
+        apiName: apiConfig?.apiName || '资质证书',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, pageIndex, pageSize, endpoint }),
+        responseSummary: JSON.stringify({ total }),
+      });
+      console.log('API call recorded successfully with total records:', total);
+      console.log('API call recorded successfully with list:', data.Result);
+      return {
+        total,
+        list: data.Result || [],
+      };
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_certificate',
+      apiName: apiConfig?.apiName || '资质证书',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+    return { total: 0, list: [] };
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_certificate',
+      apiName: apiConfig?.apiName || '资质证书',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return { total: 0, list: [] };
+  }
+}
+
+// 企业人员董监高详细信息API (ApiCode: 669)
+// ECISeniorPerson/GetList 接口返回的是某个人在哪些企业任职的信息
+interface QccExecutiveRelation {
+  Name: string;            // 企业名称
+  CreditCode: string;      // 统一社会信用代码
+  OperName: string;        // 法人姓名
+  Status: string;          // 企业状态
+  RegCap: string;          // 注册资本
+  Date: string;            // 成立日期
+  RelationList: { Type: string; TypeDesc: string; Value: string }[];  // 关系列表
+  Industry: { Industry: string; SubIndustry: string };  // 行业
+  Area: { Province: string; City: string; County: string };  // 地区
+}
+
+// 高管详细信息（整合后的结构）
+interface QccExecutiveDetail {
+  Name: string;            // 姓名
+  Job: string;             // 在本企业的职务
+  Education: string;       // 学历（此接口不返回）
+  Introduction: string;    // 简介（此接口不返回）
+  OtherCompany: { Name: string; Job: string; Status: string }[]; // 其他任职企业
+  TotalCompanies: number;  // 关联企业总数
+  AsLegalRep: number;      // 担任法人的企业数
+  AsExecutive: number;     // 任职的企业数
+}
+
+// 企业人员董监高详细信息API (ApiCode: 669)
+// 此接口需要传入 searchKey(企业信用代码) 和 personName(人员姓名)
+// 返回该人员在其他企业的任职情况
+async function callQichachaExecutiveDetailApi(
+  creditCode: string,
+  executives: QccExecutive[] = []
+): Promise<QccExecutiveDetail[]> {
+  const config = await getQichachaConfig();
+  if (!config) return [];
+
+  // 如果没有高管列表，无法查询详细信息
+  if (!executives || executives.length === 0) {
+    console.log('[QCC] No executives provided, skipping executive detail query');
+    return [];
+  }
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('669');
+  const endpoint = apiConfig?.endpoint || 'ECISeniorPerson/GetList';
+  const apiCost = apiConfig?.cost || '0.30';
+
+  // 只查询前5位关键高管，避免过多API调用
+  const keyExecutives = executives.slice(0, 5);
+  const results: QccExecutiveDetail[] = [];
+
+  for (const exec of keyExecutives) {
+    if (!exec.Name) continue;
+
+    try {
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const sign = generateQccSign(appKey, secretKey, timestamp);
+
+      // ECISeniorPerson/GetList 需要两个参数：searchKey 和 personName
+      const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&searchKey=${encodeURIComponent(creditCode)}&personName=${encodeURIComponent(exec.Name)}`;
+
+      console.log(`[QCC] Querying executive detail for: ${exec.Name}`);
+
+      const response = await fetch(url, {
+        headers: { 'Token': sign, 'Timespan': timestamp },
+      });
+
+      const data = await response.json();
+
+      if (data.Status === '200') {
+        // 解析返回数据
+        const totalRecords = data.Paging?.TotalRecords || 0;
+        const relationList = data.Result || [];
+
+        // 统计担任法人和任职的企业数
+        let asLegalRep = 0;
+        let asExecutive = 0;
+
+        // 从 GroupItems 中获取统计信息
+        if (data.GroupItems && Array.isArray(data.GroupItems)) {
+          const typeGroup = data.GroupItems.find((g: any) => g.Key === 'type');
+          if (typeGroup && typeGroup.Items) {
+            const legalRepItem = typeGroup.Items.find((i: any) => i.Value === '0');
+            const execItem = typeGroup.Items.find((i: any) => i.Value === '2');
+            asLegalRep = legalRepItem ? parseInt(legalRepItem.Count) || 0 : 0;
+            asExecutive = execItem ? parseInt(execItem.Count) || 0 : 0;
+          }
+        }
+
+        // 构建其他任职企业列表（排除当前企业）
+        const otherCompanies = relationList
+          .filter((r: any) => r.CreditCode !== creditCode)
+          .slice(0, 10)  // 最多取10家
+          .map((r: any) => {
+            // 从 RelationList 中提取职务
+            const jobs = r.RelationList?.map((rel: any) => rel.Value).filter(Boolean).join('、') || '';
+            return {
+              Name: r.Name || '',
+              Job: jobs,
+              Status: r.Status || '',
+            };
+          });
+
+        results.push({
+          Name: exec.Name,
+          Job: exec.Job || '',
+          Education: '',  // 此接口不返回学历
+          Introduction: '',  // 此接口不返回简介
+          OtherCompany: otherCompanies,
+          TotalCompanies: totalRecords,
+          AsLegalRep: asLegalRep,
+          AsExecutive: asExecutive,
+        });
+
+        await recordApiCall({
+          apiType: 'qichacha_executive_detail',
+          apiName: apiConfig?.apiName || '企业人员董监高信息',
+          status: 'success',
+          cost: apiCost,
+          requestParams: JSON.stringify({ creditCode, personName: exec.Name, endpoint }),
+          responseSummary: JSON.stringify({
+            totalCompanies: totalRecords,
+            asLegalRep,
+            asExecutive,
+            otherCompaniesCount: otherCompanies.length
+          }),
+        });
+      } else {
+        // API返回错误
+        const errorMsg = `错误码: ${data.Status} | 错误信息: ${data.Message || 'Unknown'}`;
+        console.log(`[QCC] Executive detail query failed for ${exec.Name}: ${errorMsg}`);
+
+        await recordApiCall({
+          apiType: 'qichacha_executive_detail',
+          apiName: apiConfig?.apiName || '企业人员董监高信息',
+          status: 'failed',
+          cost: '0',  // 失败不计费
+          requestParams: JSON.stringify({ creditCode, personName: exec.Name, endpoint }),
+          errorMessage: errorMsg,
+          responseSummary: JSON.stringify(data).substring(0, 500),
+        });
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.log(`[QCC] Executive detail query exception for ${exec.Name}: ${errorMsg}`);
+
+      await recordApiCall({
+        apiType: 'qichacha_executive_detail',
+        apiName: apiConfig?.apiName || '企业人员董监高信息',
+        status: 'failed',
+        requestParams: JSON.stringify({ creditCode, personName: exec.Name, endpoint }),
+        errorMessage: errorMsg,
+      });
+    }
+
+    // 添加延迟，避免请求过快
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  console.log(`[QCC] Executive details fetched: ${results.length} executives`);
+  return results;
+}
+
+// 股权穿透(四层)API (ApiCode: 642) - 查询上游股东
+async function callQichachaEquityThroughApi(keyword: string): Promise<QccEquityThrough | null> {
+  const config = await getQichachaConfig();
+  if (!config) {
+    console.log('[QCC] API not configured, skipping equity through');
+    return null;
+  }
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('642');
+  const endpoint = apiConfig?.endpoint || 'EquityThrough/GetEquityThrough';
+  const apiCost = apiConfig?.cost || '0.50';
+  const paramName = apiConfig?.primaryParam || 'keyWord';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(keyword)}&level=4`;
+
+    const response = await fetch(url, {
+      headers: {
+        'Token': sign,
+        'Timespan': timestamp,
+      },
+    });
+
+    const data = await response.json();
+
+    if (data.Status === '200' && data.Result) {
+      await recordApiCall({
+        apiType: 'qichacha_equity_through',
+        apiName: apiConfig?.apiName || '股权穿透(四层)',
+        status: 'success',
+        cost: apiCost,
+        companyName: data.Result.Name,
+        requestParams: JSON.stringify({ keyword, endpoint }),
+        responseSummary: JSON.stringify({ childrenCount: data.Result.Count }),
+      });
+      return data.Result;
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_equity_through',
+      apiName: apiConfig?.apiName || '股权穿透(四层)',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ keyword, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+
+    return null;
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_equity_through',
+      apiName: apiConfig?.apiName || '股权穿透(四层)',
+      status: 'failed',
+      requestParams: JSON.stringify({ keyword, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    console.error('[QCC] Equity Through API call failed:', error);
+    return null;
+  }
+}
+
+// 对外投资穿透(十层)API (ApiCode: 663) - 查询下游子公司
+async function callQichachaInvestmentThroughApi(keyword: string): Promise<QccInvestmentThrough | null> {
+  const config = await getQichachaConfig();
+  if (!config) {
+    console.log('[QCC] API not configured, skipping investment through');
+    return null;
+  }
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('663');
+  const endpoint = apiConfig?.endpoint || 'ECIInvestmentThrough/GetInfo';
+  const apiCost = apiConfig?.cost || '0.50';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    // percent: 持股比例阈值，设为0表示查询所有对外投资
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(keyword)}&percent=0&pageSize=20`;
+
+    const response = await fetch(url, {
+      headers: {
+        'Token': sign,
+        'Timespan': timestamp,
+      },
+    });
+
+    const data = await response.json();
+
+    if (data.Status === '200' && data.Result) {
+      await recordApiCall({
+        apiType: 'qichacha_investment_through',
+        apiName: apiConfig?.apiName || '对外投资穿透(十层)',
+        status: 'success',
+        cost: apiCost,
+        companyName: data.Result.CompanyName,
+        requestParams: JSON.stringify({ keyword, endpoint }),
+        responseSummary: JSON.stringify({
+          investmentCount: data.Result.BreakThroughList?.length || 0,
+          findMatched: data.Result.FindMatched
+        }),
+      });
+      return data.Result;
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_investment_through',
+      apiName: apiConfig?.apiName || '对外投资穿透(十层)',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ keyword, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+
+    return null;
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_investment_through',
+      apiName: apiConfig?.apiName || '对外投资穿透(十层)',
+      status: 'failed',
+      requestParams: JSON.stringify({ keyword, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    console.error('[QCC] Investment Through API call failed:', error);
+    return null;
+  }
+}
+
+// 股权穿透数据结构
+interface QccEquityThrough {
+  KeyNo: string;
+  Name: string;
+  Count: string;
+  Children: QccEquityThroughChild[] | null;
+}
+
+interface QccEquityThroughChild {
+  KeyNo: string;
+  Name: string;
+  Category: string;  // 0-企业, 2-自然人
+  FundedRatio: string;  // 出资比例
+  InParentActualRadio: string;  // 查询企业的出资比例
+  Count: string;
+  Grade: string;  // 层级
+  ShouldCapi: string;  // 认缴出资额
+  StockRightNum: string;  // 持股数
+  ShortStatus: string;  // 状态
+  Children: QccEquityThroughChild[] | null;
+}
+
+// 对外投资穿透数据结构
+interface QccInvestmentThrough {
+  KeyNo: string;
+  CompanyName: string;
+  FindMatched: string;
+  Remark: string | null;
+  BreakThroughList: QccInvestmentThroughItem[];
+}
+
+interface QccInvestmentThroughItem {
+  KeyNo: string;
+  Name: string;
+  CreditCode: string;
+  CorpStatus: string;
+  TotalStockPercent: string;
+  DetailInfoList: QccInvestmentDetailInfo[];
+}
+
+interface QccInvestmentDetailInfo {
+  Level: string;
+  ShouldCapi: string;
+  CapitalType: string;
+  BreakThroughStockPercent: string;
+  StockType: string;  // 直接/间接
+  Path: string;  // 层级关系
+  StockPercent: string;
+}
+
+// 融资信息核查API (ApiCode: 950)
+interface QccFinancing {
+  Date: string;           // 融资日期
+  ProductName: string;    // 产品名称
+  Round: string;          // 融资轮次
+  Amount: string;         // 融资金额
+  Valuation: string;      // 估值
+  Investment: string;     // 投资方
+  NewsUrl: string;        // 新闻链接
+}
+
+// 融资信息核查API (ApiCode: 950)
+async function callQichachaFinancingApi(creditCode: string, pageIndex: number = 1, pageSize: number = 20): Promise<{ total: number; list: QccFinancing[] }> {
+  const config = await getQichachaConfig();
+  if (!config) return { total: 0, list: [] };
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API端点配置
+  const apiConfig = await getQichachaApiConfigByCode('950');
+  const endpoint = apiConfig?.endpoint || 'CompanyFinancingSearch/GetList';
+  const apiCost = apiConfig?.cost || '0.50';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sign = generateQccSign(appKey, secretKey, timestamp);
+
+    // 使用数据库配置的端点
+    const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}&pageIndex=${pageIndex}&pageSize=${pageSize}`;
+
+    console.log('[QCC Financing] Calling API:', url.replace(appKey, '***'));
+
+    const response = await fetch(url, {
+      headers: { 'Token': sign, 'Timespan': timestamp },
+    });
+
+    const data = await response.json();
+
+    console.log('[QCC Financing] API Response Status:', data.Status, 'VerifyResult:', data.Result?.VerifyResult);
+
+    if (data.Status === '200' && data.Result) {
+      await recordApiCall({
+        apiType: 'qichacha_financing',
+        apiName: apiConfig?.apiName || '融资信息核查',
+        status: 'success',
+        cost: apiCost,
+        requestParams: JSON.stringify({ creditCode, pageIndex, pageSize, endpoint }),
+        responseSummary: JSON.stringify({
+          total: data.Paging?.TotalRecords || 0,
+          verifyResult: data.Result.VerifyResult
+        }),
+      });
+      return {
+        total: data.Paging?.TotalRecords || 0,
+        list: data.Result.Data || [],
+      };
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_financing',
+      apiName: apiConfig?.apiName || '融资信息核查',
+      status: 'failed',
+      cost: apiCost,
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: data.Message || 'Unknown error',
+    });
+    return { total: 0, list: [] };
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_financing',
+      apiName: apiConfig?.apiName || '融资信息核查',
+      status: 'failed',
+      requestParams: JSON.stringify({ creditCode, endpoint }),
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+    });
+    console.error('[QCC Financing] API call failed:', error);
+    return { total: 0, list: [] };
+  }
+}
+// 综合风险核查API (ApiCode: 2006)
+// 风险扫描接口返回的风险信息类型
+interface QccRiskInfo {
+  ShiXin: any[] | null;           // 失信被执行人
+  ZhiXing: any[] | null;          // 被执行人
+  AdminPenalty: any[] | null;     // 行政处罚
+  Exception: any[] | null;        // 经营异常
+  ChattelMortgage: any[] | null;  // 动产抵押
+  Liquidation: any[] | null;      // 清算信息
+  EquityPledge: any[] | null;     // 股权质押
+  SeriousIllegal: any[] | null;   // 严重违法
+  EquityFreeze: any[] | null;     // 股权冻结
+  JudicialSale: any[] | null;     // 司法拍卖
+  Bankruptcy: any[] | null;       // 破产信息
+  Sumptuary: any[] | null;        // 限制消费
+  EnvPunishment: any[] | null;    // 环保处罚
+  TaxOweNotice: any[] | null;     // 欠税公告
+  TaxIllegal: any[] | null;       // 税务违法
+  TaxAbnormal: any[] | null;      // 税务异常
+  TaxHurry: any[] | null;         // 税务催报
+  TaxReminder: any[] | null;      // 税务提醒
+  PublicSecurityNotice: any[] | null; // 公安通知
+}
+
+// 风险扫描完整返回类型
+interface QccRiskScanResult {
+  VerifyResult: number;
+  Data: {
+    KeyNo: string;
+    Name: string;
+    CreditCode: string;
+    OperName: string;
+    Status: string;
+    StartDate: string;
+    RegistCapi: string;
+    RealCapi: string;
+    // ... 其他基础信息字段
+    // 风险信息
+    ShiXin: any[] | null;
+    ZhiXing: any[] | null;
+    AdminPenalty: any[] | null;
+    Exception: any[] | null;
+    ChattelMortgage: any[] | null;
+    Liquidation: any[] | null;
+    EquityPledge: any[] | null;
+    SeriousIllegal: any[] | null;
+    EquityFreeze: any[] | null;
+    JudicialSale: any[] | null;
+    Bankruptcy: any[] | null;
+    Sumptuary: any[] | null;
+    EnvPunishment: any[] | null;
+    TaxOweNotice: any[] | null;
+    TaxIllegal: any[] | null;
+    TaxAbnormal: any[] | null;
+    TaxHurry: any[] | null;
+    TaxReminder: any[] | null;
+    PublicSecurityNotice: any[] | null;
+    // 额外信息
+    TagList: Array<{ Type: string; Name: string }> | null;
+    BeneficiaryList: any[] | null;
+    ActualControllerList: any[] | null;
+    GroupInfo: { GroupId: string; Name: string; Logo: string } | null;
+    FinancialInformation: { AccountTitle: string; Amount: string; Year: string } | null;
+  };
+}
+
+
+/**
+ * 调用企查查风险扫描API
+ * 接口编码：2006
+ * 
+ * @param searchKey 企业名称或统一社会信用代码
+ * @returns 风险扫描结果，包含工商信息和风险信息
+ */
+
+
+
+
+
+
+
+async function callQichachaRiskScanApi(searchKey: string): Promise<QccRiskScanResult | null> {
+  const config = await getQichachaConfig();
+  if (!config) {
+    console.log('[QCC RiskScan] No QCC config available');
+    return null;
+  }
+
+  const { appKey, secretKey } = config;
+
+  // 从数据库获取API配置
+  const apiConfig = await getQichachaApiConfigByCode('2006');
+  if (!apiConfig || !apiConfig.isEnabled) {
+    console.log('[QCC RiskScan] API 2006 is not configured or disabled');
+    return null;
+  }
+
+  const endpoint = apiConfig?.endpoint || 'RiskControl/Scan';
+  const apiCost = apiConfig?.cost || '6.00';
+  const paramName = apiConfig?.primaryParam || 'searchKey';
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const sign = generateQccSign(appKey, secretKey, timestamp);
+
+
+  const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(searchKey)}`;
+
+  try {
+    console.log(`[QCC RiskScan] Calling API for: ${searchKey}`);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Token': sign,
+        'Timespan': timestamp,
+      },
+    });
+
+    const responseText = await response.text();
+    let data: any;
+
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('[QCC RiskScan] JSON parse error:', responseText.substring(0, 500));
+      await recordApiCall({
+        apiType: 'qichacha_risk_scan',
+        apiName: apiConfig.apiName,
+        status: 'failed',
+        cost: '0.00',
+        companyName: searchKey,
+        requestParams: JSON.stringify({ searchKey }),
+        responseSummary: 'JSON解析失败',
+        errorMessage: responseText.substring(0, 500),
+      });
+      return null;
+    }
+
+    if (data.Status === '200' && data.Result) {
+      await recordApiCall({
+        apiType: 'qichacha_risk_scan',
+        apiName: apiConfig.apiName,
+        status: 'success',
+        cost: apiConfig.cost || '1.00',
+        companyName: searchKey,
+        requestParams: JSON.stringify({ searchKey }),
+        responseSummary: JSON.stringify({
+          name: data.Result.Data?.Name,
+          hasRisk: !!(data.Result.Data?.ShiXin || data.Result.Data?.ZhiXing ||
+            data.Result.Data?.AdminPenalty || data.Result.Data?.Exception),
+        }),
+      });
+      return data.Result;
+    }
+
+    await recordApiCall({
+      apiType: 'qichacha_risk_scan',
+      apiName: apiConfig.apiName,
+      status: 'failed',
+      cost: '0.00',
+      companyName: searchKey,
+      requestParams: JSON.stringify({ searchKey }),
+      responseSummary: `Status: ${data.Status}, Message: ${data.Message}`,
+    });
+    return null;
+
+  } catch (error) {
+    await recordApiCall({
+      apiType: 'qichacha_risk_scan',
+      apiName: apiConfig.apiName,
+      status: 'failed',
+      cost: '0.00',
+      companyName: searchKey,
+      requestParams: JSON.stringify({ searchKey }),
+      errorMessage: error instanceof Error ? error.message : '未知错误',
+    });
+    return null;
+  }
+}
+
+// 获取企业完整信息（包括工商信息、股东、高管、知识产权、客户供应商、年报等）
+interface CompanyFullInfo {
+  basicInfo: QccCompanyDetail | null;
+  shareholders: QccShareholder[];
+  executives: QccExecutive[];
+  executiveDetails: QccExecutiveDetail[];  // 高管详细信息
+  patents: { total: number; list: QccPatent[] };  // 专利信息
+  trademarks: { total: number; list: QccTrademark[] };  // 商标信息
+  copyrights: { total: number; list: QccCopyright[] };  // 软著信息
+  customers: QccCustomer[];  // 客户信息
+  suppliers: QccSupplier[];  // 供应商信息
+  annualReports: QccAnnualReport[];  // 年报信息
+  certificates: { total: number; list: QccCertificate[] };  // 资质证书
+  equityThrough: QccEquityThrough | null;  // 股权穿透（上游股东）
+  investmentThrough: QccInvestmentThrough | null;  // 对外投资穿透（下游子公司）
+  financings: { total: number; list: QccFinancing[] };  // 融资信息
+  riskScan: QccRiskScanResult | null;  // 新增：风险扫描结果
+}
+
+/**
+ * 获取企业完整信息（包含缓存逻辑）
+ * 
+ * 缓存策略：
+ * 1. 先检查数据库缓存是否存在且未过期
+ * 2. 如果缓存有效，直接返回缓存数据，节省API费用
+ * 3. 如果缓存不存在或已过期，调用企查查API获取数据
+ * 4. 获取新数据后保存到缓存
+ * 
+ * @param companyNameOrCreditCode 企业名称或统一社会信用代码
+ * @returns 企业完整信息
+ */
+async function getCompanyFullInfo(companyNameOrCreditCode: string): Promise<CompanyFullInfo> {
+  // 先搜索获取信用代码
+  let creditCode = companyNameOrCreditCode;
+  let companyName = companyNameOrCreditCode;
+
+  // 如果不是信用代码格式，先搜索
+  if (!/^[0-9A-Z]{18}$/.test(companyNameOrCreditCode)) {
+    const searchResults = await callQichachaApi(companyNameOrCreditCode);
+    if (searchResults.length > 0 && searchResults[0].creditCode) {
+      creditCode = searchResults[0].creditCode;
+      companyName = searchResults[0].name || companyNameOrCreditCode;
+    } else {
+      return {
+        basicInfo: null,
+        shareholders: [],
+        executives: [],
+        executiveDetails: [],
+        patents: { total: 0, list: [] },
+        trademarks: { total: 0, list: [] },
+        copyrights: { total: 0, list: [] },
+        customers: [],
+        suppliers: [],
+        annualReports: [],
+        certificates: { total: 0, list: [] },
+        equityThrough: null,
+        investmentThrough: null,
+        financings: { total: 0, list: [] },
+        riskScan: null,
+      };
+    }
+  }
+
+  // ============ 缓存检查 ============
+  // 获取缓存有效期配置（默认30天）
+  const cacheDays = await getCacheDaysConfig();
+
+  // 检查缓存是否存在
+  const cachedData = await getQichachaFullDataCache(creditCode);
+
+  if (cachedData && isCacheValid(cachedData, cacheDays)) {
+    // 缓存命中，直接返回缓存数据
+    console.log(`[QCC] Cache HIT for ${creditCode}, cached at ${cachedData.cachedAt}, valid for ${cacheDays} days`);
+
+    // 更新缓存命中次数
+    await updateCacheHitCount(creditCode);
+
+    // 记录缓存命中（不计费）
+    await recordApiCall({
+      apiType: 'qichacha_cache_hit',
+      apiName: '缓存命中',
+      status: 'success',
+      cost: '0.00',
+      companyName: companyName,
+      requestParams: JSON.stringify({ creditCode }),
+      responseSummary: JSON.stringify({
+        source: 'cache',
+        cachedAt: cachedData.cachedAt,
+        hitCount: (cachedData.hitCount || 0) + 1,
+        savedCost: '4.35' // 节省的11个API调用费用
+      }),
+    });
+
+    // 解析缓存的JSON数据
+    return {
+      basicInfo: cachedData.basicInfo ? JSON.parse(cachedData.basicInfo) : null,
+      shareholders: cachedData.shareholders ? JSON.parse(cachedData.shareholders) : [],
+      executives: cachedData.executives ? JSON.parse(cachedData.executives) : [],
+      executiveDetails: cachedData.executiveDetails ? JSON.parse(cachedData.executiveDetails) : [],
+      patents: cachedData.patents ? JSON.parse(cachedData.patents) : { total: 0, list: [] },
+      trademarks: cachedData.trademarks ? JSON.parse(cachedData.trademarks) : { total: 0, list: [] },
+      copyrights: cachedData.copyrights ? JSON.parse(cachedData.copyrights) : { total: 0, list: [] },
+      customers: cachedData.customers ? JSON.parse(cachedData.customers) : [],
+      suppliers: cachedData.suppliers ? JSON.parse(cachedData.suppliers) : [],
+      annualReports: cachedData.annualReports ? JSON.parse(cachedData.annualReports) : [],
+      certificates: cachedData.certificates ? JSON.parse(cachedData.certificates) : { total: 0, list: [] },
+      equityThrough: (cachedData as any).equityThrough ? JSON.parse((cachedData as any).equityThrough) : null,
+      investmentThrough: (cachedData as any).investmentThrough ? JSON.parse((cachedData as any).investmentThrough) : null,
+      financings: (cachedData as any).financings ? JSON.parse((cachedData as any).financings) : { total: 0, list: [] },
+      riskScan: (cachedData as any).riskScan ? JSON.parse((cachedData as any).riskScan) : null,
+    };
+  }
+
+  // ============ 缓存未命中，调用API ============
+  console.log(`[QCC] Cache MISS for ${creditCode}, fetching from API...`);
+  console.log(`[QCC] Company Name: ${companyName}, Credit Code: ${creditCode}`);
+
+  // 并行调用所有API获取完整信息
+  const [
+    basicInfo,
+    shareholders,
+    executives,
+    executiveDetails,
+    patents,
+    trademarks,
+    copyrights,
+    customers,
+    suppliers,
+    annualReports,
+    certificates,
+    equityThrough,
+    investmentThrough,
+    financings,
+    riskScan,
+  ] = await Promise.all([
+    callQichachaDetailApi(creditCode),
+    callQichachaShareholderApi(creditCode),
+    callQichachaExecutiveApi(creditCode),
+    Promise.resolve([]),  // executiveDetails 需要先获取executives后再查询
+    callQichachaPatentApi(creditCode),
+    callQichachaTrademarkApi(creditCode),
+    callQichachaCopyrightApi(creditCode),
+    callQichachaCustomerApi(creditCode),
+    callQichachaSupplierApi(creditCode),
+    callQichachaAnnualReportApi(creditCode),
+    callQichachaCertificateApi(creditCode),
+    callQichachaEquityThroughApi(companyName),  // 股权穿透使用企业名称
+    callQichachaInvestmentThroughApi(companyName),  // 对外投资穿透使用企业名称
+    callQichachaFinancingApi(creditCode),  // 融资信息查询
+    callQichachaRiskScanApi(creditCode),
+  ]);
+
+  // 获取高管详细信息（需要先有executives列表）
+  let executiveDetailsResult: QccExecutiveDetail[] = [];
+  if (executives && executives.length > 0) {
+    console.log(`[QCC] Fetching executive details for ${executives.length} executives...`);
+    executiveDetailsResult = await callQichachaExecutiveDetailApi(creditCode, executives);
+  }
+
+  console.log(`[QCC] Full info fetched:`);
+  console.log(`  - basicInfo: ${basicInfo ? basicInfo.Name : 'null'}`);
+  console.log(`  - shareholders: ${shareholders.length}`);
+  console.log(`  - executives: ${executives.length}`);
+  console.log(`  - executiveDetails: ${executiveDetailsResult.length}`);
+  console.log(`  - patents: ${patents.total}`);
+  console.log(`  - trademarks: ${trademarks.total}`);
+  console.log(`  - copyrights: ${copyrights.total}`);
+  console.log(`  - customers: ${customers.length}`);
+  console.log(`  - suppliers: ${suppliers.length}`);
+  console.log(`  - annualReports: ${annualReports.length}`);
+  console.log(`  - certificates: ${certificates.total}`);
+  console.log(`  - equityThrough: ${equityThrough?.Count || 0}`);
+  console.log(`  - investmentThrough: ${investmentThrough?.BreakThroughList?.length || 0}`);
+  console.log(`  - financings: ${financings.total}`);
+
+  // ============ 保存到缓存 ============
+  try {
+    await saveQichachaFullDataCache({
+      creditCode,
+      companyName: basicInfo?.Name || companyName,
+      basicInfo: basicInfo ? JSON.stringify(basicInfo) : null,
+      shareholders: shareholders.length > 0 ? JSON.stringify(shareholders) : null,
+      executives: executives.length > 0 ? JSON.stringify(executives) : null,
+      executiveDetails: executiveDetailsResult.length > 0 ? JSON.stringify(executiveDetailsResult) : null,
+      patents: patents.total > 0 ? JSON.stringify(patents) : null,
+      trademarks: trademarks.total > 0 ? JSON.stringify(trademarks) : null,
+      copyrights: copyrights.total > 0 ? JSON.stringify(copyrights) : null,
+      customers: customers.length > 0 ? JSON.stringify(customers) : null,
+      suppliers: suppliers.length > 0 ? JSON.stringify(suppliers) : null,
+      annualReports: annualReports.length > 0 ? JSON.stringify(annualReports) : null,
+      certificates: certificates.total > 0 ? JSON.stringify(certificates) : null,
+      equityThrough: equityThrough ? JSON.stringify(equityThrough) : null,
+      investmentThrough: investmentThrough ? JSON.stringify(investmentThrough) : null,
+      financings: financings.total > 0 ? JSON.stringify(financings) : null,
+      riskScan: riskScan ? JSON.stringify(riskScan) : null,
+    } as any);
+    console.log(`[QCC] Data cached for ${creditCode}`);
+  } catch (cacheError) {
+    // 缓存失败不影响主流程
+    console.error(`[QCC] Failed to cache data for ${creditCode}:`, cacheError);
+  }
+
+  return {
+    basicInfo,
+    shareholders,
+    executives,
+    executiveDetails: executiveDetailsResult,
+    patents,
+    trademarks,
+    copyrights,
+    customers,
+    suppliers,
+    annualReports,
+    certificates,
+    equityThrough,
+    investmentThrough,
+    financings,
+    riskScan,
+  };
+}
+
+// 管理员权限检查中间件
+const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (ctx.user?.role !== 'admin') {
+    throw new TRPCError({ code: 'FORBIDDEN', message: '仅管理员可访问' });
+  }
+  return next({ ctx });
+});
+
+export const appRouter = router({
+  system: systemRouter,
+  auth: router({
+    me: publicProcedure.query(opts => opts.ctx.user),
+    logout: publicProcedure.mutation(({ ctx }) => {
+      const cookieOptions = getSessionCookieOptions(ctx.req);
+      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+      return { success: true } as const;
+    }),
+
+    // 手机号登录
+    loginByPhone: publicProcedure
+      .input(z.object({
+        phone: z.string().regex(/^1[3-9]\d{9}$/, '手机号格式不正确'),
+        password: z.string().min(6, '密码至少6位'),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        // 获取客户端IP地址
+        const ipAddress = ctx.req.headers['x-forwarded-for'] as string ||
+          ctx.req.headers['x-real-ip'] as string ||
+          ctx.req.socket?.remoteAddress ||
+          'unknown';
+        const userAgent = ctx.req.headers['user-agent'] || 'unknown';
+
+        const user = await verifyUserLogin(input.phone, input.password);
+        if (!user) {
+          // 记录登录失败日志
+          await recordLoginLog({
+            userId: 0,
+            phone: input.phone,
+            ipAddress,
+            userAgent,
+            status: 'failed',
+            failReason: '手机号或密码错误',
+          });
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: '手机号或密码错误' });
+        }
+
+        // 记录登录成功日志
+        await recordLoginLog({
+          userId: user.id,
+          phone: user.phone || input.phone,
+          userName: user.name || undefined,
+          ipAddress,
+          userAgent,
+          status: 'success',
+        });
+
+        // 创建会话并设置cookie
+        const { sdk } = await import('./_core/sdk');
+        const sessionToken = await sdk.createSessionToken(user.openId, { name: user.name || '' });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, sessionToken, {
+          ...cookieOptions,
+          maxAge: 365 * 24 * 60 * 60 * 1000, // 1年
+        });
+
+        return {
+          success: true,
+          user: {
+            id: user.id,
+            name: user.name,
+            phone: user.phone,
+            role: user.role,
+            reportQuota: user.reportQuota,
+            reportUsed: user.reportUsed,
+            preferredLlm: user.preferredLlm,
+          },
+        };
+      }),
+
+    // 获取当前用户额度信息
+    getQuota: protectedProcedure.query(async ({ ctx }) => {
+      if (!ctx.user) {
+        throw new TRPCError({ code: 'UNAUTHORIZED', message: '未登录' });
+      }
+      const quota = await checkUserQuota(ctx.user.id);
+      return {
+        total: ctx.user.reportQuota,
+        used: ctx.user.reportUsed,
+        remaining: quota.remaining,
+        preferredLlm: ctx.user.preferredLlm,
+      };
+    }),
+
+    // 更新用户偏好的LLM
+    updatePreferredLlm: protectedProcedure
+      .input(z.object({
+        preferredLlm: z.enum(['qwen', 'zhipu', 'wenxin']),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        if (!ctx.user) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: '未登录' });
+        }
+        const success = await updateUser(ctx.user.id, { preferredLlm: input.preferredLlm });
+        return { success, message: success ? '已更新默认大模型' : '更新失败' };
+      }),
+
+    // 修改密码
+    changePassword: protectedProcedure
+      .input(z.object({
+        oldPassword: z.string().min(6, '旧密码至少6位'),
+        newPassword: z.string().min(6, '新密码至少6位'),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        if (!ctx.user) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: '未登录' });
+        }
+        const result = await changeUserPassword(ctx.user.id, input.oldPassword, input.newPassword);
+        if (!result.success) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: result.message });
+        }
+        return result;
+      }),
+
+    // 获取当前用户的登录历史
+    getLoginHistory: protectedProcedure
+      .input(z.object({
+        limit: z.number().default(10),
+      }).optional())
+      .query(async ({ input, ctx }) => {
+        if (!ctx.user) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: '未登录' });
+        }
+        const logs = await getUserLoginLogs(ctx.user.id, input?.limit ?? 10);
+        return logs;
+      }),
+  }),
+
+  // ============ 用户管理（管理员用） ============
+  userManagement: router({
+    // 获取用户列表
+    list: adminProcedure
+      .input(z.object({
+        limit: z.number().default(100),
+        offset: z.number().default(0),
+      }).optional())
+      .query(async ({ input }) => {
+        const limit = input?.limit ?? 100;
+        const offset = input?.offset ?? 0;
+        const users = await getAllUsers(limit, offset);
+        const total = await getUsersCount();
+        return { users, total };
+      }),
+
+    // 批量导入用户（通过手机号）
+    batchImport: adminProcedure
+      .input(z.object({
+        phones: z.array(z.string()).min(1).max(500),
+        reportQuota: z.number().default(50),
+      }))
+      .mutation(async ({ input }) => {
+        const results = await batchCreateUsers(input.phones, input.reportQuota);
+        const successCount = results.filter(r => r.success).length;
+        const failCount = results.filter(r => !r.success).length;
+        return {
+          success: true,
+          message: `成功导入 ${successCount} 个用户，失败 ${failCount} 个`,
+          results,
+        };
+      }),
+
+    // 更新用户信息
+    update: adminProcedure
+      .input(z.object({
+        id: z.number(),
+        name: z.string().optional(),
+        role: z.enum(['user', 'admin']).optional(),
+        reportQuota: z.number().optional(),
+        preferredLlm: z.enum(['qwen', 'zhipu', 'wenxin']).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        const success = await updateUser(id, data);
+        return { success, message: success ? '更新成功' : '更新失败' };
+      }),
+
+    // 重置用户密码
+    resetPassword: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const newPassword = await resetUserPassword(input.id);
+        if (!newPassword) {
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '重置密码失败' });
+        }
+        return { success: true, newPassword };
+      }),
+
+    // 删除用户
+    delete: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const success = await deleteUser(input.id);
+        return { success, message: success ? '删除成功' : '删除失败' };
+      }),
+
+    // 获取单个用户信息
+    getById: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        const user = await getUserById(input.id);
+        if (!user) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: '用户不存在' });
+        }
+        return user;
+      }),
+
+    // 为用户充值额度
+    rechargeQuota: adminProcedure
+      .input(z.object({
+        userId: z.number(),
+        amount: z.number().min(1, '充值数量必须大于0'),
+      }))
+      .mutation(async ({ input }) => {
+        const result = await rechargeUserQuota(input.userId, input.amount);
+        if (!result.success) {
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: result.message });
+        }
+        return result;
+      }),
+
+    // 获取登录日志列表
+    getLoginLogs: adminProcedure
+      .input(z.object({
+        userId: z.number().optional(),
+        phone: z.string().optional(),
+        status: z.enum(['success', 'failed']).optional(),
+        limit: z.number().default(50),
+        offset: z.number().default(0),
+      }).optional())
+      .query(async ({ input }) => {
+        const result = await getLoginLogs({
+          userId: input?.userId,
+          phone: input?.phone,
+          status: input?.status,
+          limit: input?.limit ?? 50,
+          offset: input?.offset ?? 0,
+        });
+        return result;
+      }),
+  }),
+
+  // ============ LLM提供商管理（系统级配置） ============
+  llmProvider: router({
+    // 获取所有支持的LLM提供商列表（静态配置）
+    list: publicProcedure.query(async () => {
+      return getLLMProviders();
+    }),
+
+    // 获取单个提供商信息
+    getById: publicProcedure
+      .input(z.object({ id: z.enum(['qwen', 'zhipu', 'wenxin']) }))
+      .query(async ({ input }) => {
+        return getLLMProviderById(input.id);
+      }),
+
+    // 获取启用的LLM提供商列表（从数据库读取，用于前端选择）
+    getEnabled: publicProcedure.query(async () => {
+      return getEnabledLlmProviders();
+    }),
+
+    // 获取默认LLM配置
+    getDefault: publicProcedure.query(async () => {
+      return getDefaultLlmConfig();
+    }),
+
+    // 获取所有LLM配置（管理员用，脱敏显示）
+    getConfigs: publicProcedure.query(async () => {
+      return getAllLlmConfigs();
+    }),
+
+    // 保存系统级LLM配置（管理员用）
+    saveConfig: publicProcedure
+      .input(z.object({
+        provider: z.enum(['qwen', 'zhipu', 'wenxin']),
+        providerName: z.string(),
+        defaultModel: z.string(),
+        apiKey: z.string().optional(),
+        apiSecret: z.string().optional(),
+        isEnabled: z.boolean().optional().default(true),
+        isDefault: z.boolean().optional().default(false),
+      }))
+      .mutation(async ({ input }) => {
+        const success = await saveLlmConfig(
+          input.provider,
+          input.providerName,
+          input.defaultModel,
+          input.apiKey,
+          input.apiSecret,
+          input.isEnabled,
+          input.isDefault
+        );
+        return { success, message: success ? '配置已保存' : '保存失败' };
+      }),
+
+    // 删除LLM配置（管理员用）
+    deleteConfig: publicProcedure
+      .input(z.object({ provider: z.enum(['qwen', 'zhipu', 'wenxin']) }))
+      .mutation(async ({ input }) => {
+        const success = await deleteLlmConfig(input.provider);
+        return { success, message: success ? '配置已删除' : '删除失败' };
+      }),
+
+    // 设置默认LLM提供商（管理员用）
+    setDefault: publicProcedure
+      .input(z.object({ provider: z.enum(['qwen', 'zhipu', 'wenxin']) }))
+      .mutation(async ({ input }) => {
+        const success = await setDefaultLlmProvider(input.provider);
+        return { success, message: success ? '已设为默认' : '设置失败' };
+      }),
+
+    // 测试LLM连接（验证API Key有效性）
+    testConnection: publicProcedure
+      .input(z.object({ provider: z.enum(['qwen', 'zhipu', 'wenxin']) }))
+      .mutation(async ({ input }) => {
+        console.log('[LLM Test] ========== 测试连接开始 ==========');
+        console.log('[LLM Test] 提供商:', input.provider);
+
+        try {
+          // 从数据库获取配置
+          console.log('[LLM Test] 正在从数据库获取配置...');
+          const config = await getLlmConfig(input.provider);
+          console.log('[LLM Test] 数据库返回配置:', config ? {
+            provider: config.provider,
+            providerName: config.providerName,
+            defaultModel: config.defaultModel,
+            hasApiKey: !!config.apiKey,
+            apiKeyLength: config.apiKey?.length || 0,
+            isEnabled: config.isEnabled,
+            isDefault: config.isDefault
+          } : null);
+
+          if (!config) {
+            console.log('[LLM Test] 错误: 未找到配置');
+            return { success: false, message: '未找到该提供商的配置' };
+          }
+
+          if (!config.apiKey) {
+            console.log('[LLM Test] 错误: API Key为空');
+            return { success: false, message: 'API Key未配置' };
+          }
+
+          console.log('[LLM Test] API Key已配置，长度:', config.apiKey.length);
+
+          // 构建测试消息
+          const testMessages: Message[] = [
+            { role: 'user', content: '你好，请回复"测试成功"四个字' }
+          ];
+
+          const llmConfig: LLMProviderConfig = {
+            apiKey: config.apiKey,
+            apiSecret: config.apiSecret,
+            model: config.defaultModel,
+          };
+
+          // 调用LLM
+          const startTime = Date.now();
+          const result = await invokeLLMWithProvider(
+            { messages: testMessages },
+            input.provider,
+            llmConfig
+          );
+          const duration = Date.now() - startTime;
+
+          // 检查返回结果
+          const content = result.choices?.[0]?.message?.content;
+          if (content) {
+            const contentStr = typeof content === 'string' ? content : JSON.stringify(content);
+            return {
+              success: true,
+              message: `连接成功！响应时间: ${duration}ms`,
+              response: contentStr.substring(0, 100),
+              duration
+            };
+          } else {
+            return { success: false, message: 'API返回结果异常' };
+          }
+        } catch (error) {
+          console.error('[LLM Test] Error:', error);
+          const errorMessage = error instanceof Error ? error.message : '未知错误';
+          return { success: false, message: `连接失败: ${errorMessage}` };
+        }
+      }),
+  }),
+
+  // ============ 企查查API配置管理 ============
+  qichachaApiConfig: router({
+    // 获取所有API配置
+    list: publicProcedure.query(async () => {
+      return getAllQichachaApiConfigs();
+    }),
+
+    // 获取单个API配置
+    getByCode: publicProcedure
+      .input(z.object({ apiCode: z.string() }))
+      .query(async ({ input }) => {
+        return getQichachaApiConfigByCode(input.apiCode);
+      }),
+
+    // 更新API配置
+    update: publicProcedure
+      .input(z.object({
+        apiCode: z.string(),
+        apiName: z.string().optional(),
+        endpoint: z.string().optional(),
+        primaryParam: z.string().optional(),
+        cost: z.string().optional(),
+        description: z.string().optional(),
+        isEnabled: z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { apiCode, ...data } = input;
+        await updateQichachaApiConfig(apiCode, data);
+        return { success: true, message: 'API配置已更新' };
+      }),
+
+    // 初始化默认配置
+    initDefaults: publicProcedure.mutation(async () => {
+      await initQichachaApiConfig();
+      return { success: true, message: '默认配置已初始化' };
+    }),
+  }),
+
+  // ============ API调用统计 ============
+  apiStats: router({
+    // 获取今日统计
+    today: publicProcedure.query(async () => {
+      return getTodayApiStats();
+    }),
+
+    // 获取月度统计
+    monthly: publicProcedure
+      .input(z.object({ year: z.number(), month: z.number() }).optional())
+      .query(async ({ input }) => {
+        const now = new Date();
+        const year = input?.year || now.getFullYear();
+        const month = input?.month || now.getMonth() + 1;
+        return getMonthlyApiStats(year, month);
+      }),
+
+    // 获取最近调用记录
+    recent: publicProcedure
+      .input(z.object({ limit: z.number().default(50) }).optional())
+      .query(async ({ input }) => {
+        return getRecentApiCalls(input?.limit || 50);
+      }),
+
+    // 获取统计汇总
+    summary: publicProcedure.query(async () => {
+      return getApiCallStats();
+    }),
+  }),
+
+  // ============ 园区企业管理 ============
+  parkCompany: router({
+    list: publicProcedure
+      .input(z.object({ limit: z.number().default(100), offset: z.number().default(0) }).optional())
+      .query(async ({ input }) => {
+        const { limit = 100, offset = 0 } = input || {};
+        const companies = await getParkCompanies(limit, offset);
+        const total = await getParkCompaniesCount();
+        return { companies, total };
+      }),
+
+    getById: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        return getParkCompanyById(input.id);
+      }),
+
+    search: publicProcedure
+      .input(z.object({ keyword: z.string() }))
+      .query(async ({ input }) => {
+        return searchParkCompanies(input.keyword);
+      }),
+
+    create: publicProcedure
+      .input(z.object({
+        companyName: z.string(),
+        industry: z.string().optional(),
+        businessScope: z.string().optional(),
+        registeredCapital: z.string().optional(),
+        establishedDate: z.string().optional(),
+        contactPerson: z.string().optional(),
+        contactPhone: z.string().optional(),
+        contactEmail: z.string().optional(),
+        officeArea: z.string().optional(),
+        employeeCount: z.number().optional(),
+        tags: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const id = await createParkCompany(input);
+        return { id };
+      }),
+
+    update: publicProcedure
+      .input(z.object({
+        id: z.number(),
+        companyName: z.string().optional(),
+        industry: z.string().optional(),
+        businessScope: z.string().optional(),
+        registeredCapital: z.string().optional(),
+        establishedDate: z.string().optional(),
+        contactPerson: z.string().optional(),
+        contactPhone: z.string().optional(),
+        contactEmail: z.string().optional(),
+        officeArea: z.string().optional(),
+        employeeCount: z.number().optional(),
+        tags: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        await updateParkCompany(id, data);
+        return { success: true };
+      }),
+
+    delete: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await deleteParkCompany(input.id);
+        return { success: true };
+      }),
+
+    // XLS文件导入（支持普通格式和企查查导出格式）
+    importFromXls: publicProcedure
+      .input(z.object({ fileContent: z.string() })) // base64 encoded file
+      .mutation(async ({ input }) => {
+        try {
+          const buffer = Buffer.from(input.fileContent, "base64");
+          const workbook = XLSX.read(buffer, { type: "buffer" });
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+          const data = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
+
+          // 调试日志：打印解析结果
+          console.log('[Excel Import] Sheet name:', sheetName);
+          console.log('[Excel Import] Total rows:', data.length);
+          if (data.length > 0) {
+            console.log('[Excel Import] First row keys:', Object.keys(data[0]));
+            console.log('[Excel Import] First row data:', JSON.stringify(data[0], null, 2));
+          }
+
+          // 检测是否为企查查导出格式（通过特征字段判断）
+          const isQichachaFormat = data.length > 0 && (
+            '原文件导入名称' in data[0] ||
+            '统一社会信用代码' in data[0] ||
+            '登记状态' in data[0]
+          );
+          console.log('[Excel Import] Is Qichacha format:', isQichachaFormat);
+
+          let companies;
+
+          if (isQichachaFormat) {
+            // 企查查导出格式解析
+            // 字段：原文件导入名称,登记状态,统一社会信用代码,法定代表人,企业规模,注册资本,电话,更多电话,成立日期,实缴资本,所属省份,所属城市,所属区县,企业地址
+            companies = data.map((row) => {
+              // 合并电话字段
+              const phone = row['电话'] ? String(row['电话']) : '';
+              const morePhone = row['更多电话'] ? String(row['更多电话']) : '';
+              const allPhones = [phone, morePhone].filter(p => p && p !== '-').join(';');
+
+              return {
+                companyName: String(row['原文件导入名称'] || ''),
+                creditCode: row['统一社会信用代码'] ? String(row['统一社会信用代码']) : undefined,
+                legalPerson: row['法定代表人'] ? String(row['法定代表人']) : undefined,
+                companyStatus: row['登记状态'] ? String(row['登记状态']) : undefined,
+                companyScale: row['企业规模'] ? String(row['企业规模']) : undefined,
+                registeredCapital: row['注册资本'] ? String(row['注册资本']) : undefined,
+                paidCapital: row['实缴资本'] ? String(row['实缴资本']) : undefined,
+                contactPhone: allPhones || undefined,
+                establishedDate: row['成立日期'] ? String(row['成立日期']) : undefined,
+                province: row['所属省份'] ? String(row['所属省份']) : undefined,
+                city: row['所属城市'] ? String(row['所属城市']) : undefined,
+                district: row['所属区县'] ? String(row['所属区县']) : undefined,
+                address: row['企业地址'] ? String(row['企业地址']) : undefined,
+                dataSource: 'qichacha_import',
+              };
+            }).filter(c => c.companyName);
+            console.log('[Excel Import] Qichacha format - valid companies count:', companies.length);
+            if (companies.length > 0) {
+              console.log('[Excel Import] First company:', JSON.stringify(companies[0], null, 2));
+            }
+          } else {
+            // 普通格式解析
+            companies = data.map((row) => ({
+              companyName: String(row["公司名称"] || row["企业名称"] || row["companyName"] || ""),
+              industry: row["行业"] || row["industry"] ? String(row["行业"] || row["industry"]) : undefined,
+              businessScope: row["经营范围"] || row["businessScope"] ? String(row["经营范围"] || row["businessScope"]) : undefined,
+              registeredCapital: row["注册资本"] || row["registeredCapital"] ? String(row["注册资本"] || row["registeredCapital"]) : undefined,
+              establishedDate: row["成立日期"] || row["establishedDate"] ? String(row["成立日期"] || row["establishedDate"]) : undefined,
+              contactPerson: row["联系人"] || row["contactPerson"] ? String(row["联系人"] || row["contactPerson"]) : undefined,
+              contactPhone: row["联系电话"] || row["contactPhone"] ? String(row["联系电话"] || row["contactPhone"]) : undefined,
+              contactEmail: row["邮箱"] || row["contactEmail"] ? String(row["邮箱"] || row["contactEmail"]) : undefined,
+              officeArea: row["办公面积"] || row["officeArea"] ? String(row["办公面积"] || row["officeArea"]) : undefined,
+              employeeCount: row["员工数量"] || row["employeeCount"] ? Number(row["员工数量"] || row["employeeCount"]) : undefined,
+              tags: row["标签"] || row["tags"] ? String(row["标签"] || row["tags"]) : undefined,
+              notes: row["备注"] || row["notes"] ? String(row["备注"] || row["notes"]) : undefined,
+              dataSource: 'manual',
+            })).filter(c => c.companyName);
+            console.log('[Excel Import] Standard format - valid companies count:', companies.length);
+            if (companies.length > 0) {
+              console.log('[Excel Import] First company:', JSON.stringify(companies[0], null, 2));
+            }
+          }
+
+          console.log('[Excel Import] Total valid companies to insert:', companies.length);
+          const count = await createParkCompanies(companies);
+          console.log('[Excel Import] Actually inserted count:', count);
+          return {
+            success: true,
+            count,
+            format: isQichachaFormat ? 'qichacha' : 'standard',
+            message: isQichachaFormat
+              ? `成功导入 ${count} 家企业（企查查格式）`
+              : `成功导入 ${count} 家企业`
+          };
+        } catch (error) {
+          console.error("XLS import error:", error);
+          throw new Error("文件解析失败，请确保文件格式正确");
+        }
+      }),
+
+    // 获取所有企业名称（用于匹配分析）
+    getAllNames: publicProcedure.query(async () => {
+      return getAllParkCompanyNames();
+    }),
+  }),
+
+  // ============ 企业名称搜索建议 ============
+  companySearch: router({
+    // 企业名称搜索建议（优先缓存 -> 园区企业库 -> 企查查API）
+    suggest: publicProcedure
+      .input(z.object({ keyword: z.string().min(1) }))
+      .query(async ({ input }) => {
+        const { keyword } = input;
+        const suggestions: {
+          name: string;
+          source: string;
+          creditCode?: string;
+          legalPerson?: string;
+          status?: string;
+          establishDate?: string;
+        }[] = [];
+
+        // 1. 从本地缓存中搜索（优先级最高）
+        const cachedResults = await getCachedSearchResults(keyword);
+        if (cachedResults && cachedResults.length > 0) {
+          const cachedSuggestions = cachedResults.slice(0, 5).map(c => ({
+            name: c.companyName,
+            source: "缓存数据",
+            creditCode: c.creditCode,
+            legalPerson: c.legalPerson || undefined,
+            status: c.status || undefined,
+            establishDate: c.establishDate || undefined,
+          }));
+          suggestions.push(...cachedSuggestions);
+        }
+
+        // 2. 从本地缓存表中模糊搜索（可能命中其他关键词缓存的企业）
+        if (suggestions.length < 5) {
+          const localCacheResults = await searchCompanyCache(keyword);
+          const localSuggestions = localCacheResults
+            .filter(c => !suggestions.some(s => s.creditCode === c.creditCode))
+            .slice(0, 5 - suggestions.length)
+            .map(c => ({
+              name: c.companyName,
+              source: "本地缓存",
+              creditCode: c.creditCode,
+              legalPerson: c.legalPerson || undefined,
+              status: c.status || undefined,
+              establishDate: c.establishDate || undefined,
+            }));
+          suggestions.push(...localSuggestions);
+        }
+
+        // 3. 从园区企业库中搜索
+        const parkCompaniesData = await getAllParkCompanyNames();
+        const matchedParkCompanies = parkCompaniesData
+          .filter(c => c.companyName.toLowerCase().includes(keyword.toLowerCase()))
+          .filter(c => !suggestions.some(s => s.name === c.companyName))
+          .slice(0, 3)
+          .map(c => ({ name: c.companyName, source: "园区企业" }));
+        suggestions.push(...matchedParkCompanies);
+
+        // 4. 从历史报告中搜索
+        const reports = await getCompanyReports(100, 0);
+        const matchedReports = reports
+          .filter(r => r.companyName.toLowerCase().includes(keyword.toLowerCase()))
+          .filter(r => !suggestions.some(s => s.name === r.companyName))
+          .slice(0, 3)
+          .map(r => ({ name: r.companyName, source: "历史查询" }));
+        suggestions.push(...matchedReports);
+
+        // 5. 如果本地没有结果且配置了企查查API，则调用API
+        if (suggestions.length < 3 && keyword.length >= 2) {
+          const qccResults = await callQichachaApi(keyword);
+          if (qccResults.length > 0) {
+            // 保存到缓存
+            await saveSearchResultsToCache(keyword, qccResults.map(r => ({
+              creditCode: r.creditCode,
+              companyName: r.name,
+              legalPerson: r.legalPerson,
+              status: r.status,
+              establishDate: r.establishDate,
+              registeredCapital: r.registeredCapital,
+              address: r.address,
+              dataSource: "qichacha",
+            })));
+
+            const apiSuggestions = qccResults
+              .filter(r => !suggestions.some(s => s.name === r.name))
+              .slice(0, 5)
+              .map(r => ({
+                name: r.name,
+                source: "企查查",
+                creditCode: r.creditCode,
+                legalPerson: r.legalPerson,
+                status: r.status,
+                establishDate: r.establishDate,
+              }));
+            suggestions.push(...apiSuggestions);
+          }
+        }
+
+        // 6. 添加常见企业名称后缀建议（作为备用）
+        const commonSuffixes = ["有限公司", "科技有限公司", "集团有限公司"];
+        if (suggestions.length < 5 && keyword.length >= 2 && !keyword.includes("有限") && !keyword.includes("公司")) {
+          const suffixSuggestions = commonSuffixes
+            .slice(0, 5 - suggestions.length)
+            .map(suffix => ({ name: `${keyword}${suffix}`, source: "名称建议" }))
+            .filter(s => !suggestions.some(existing => existing.name === s.name));
+          suggestions.push(...suffixSuggestions);
+        }
+
+        return suggestions.slice(0, 10);
+      }),
+
+    // 获取缓存统计信息
+    cacheStats: publicProcedure.query(async () => {
+      const stats = await getCacheStats();
+      const cacheDays = getCacheDays();
+      return { ...stats, cacheDays };
+    }),
+  }),
+
+  // ============ 公司报告管理 ============
+  report: router({
+    list: publicProcedure
+      .input(z.object({ limit: z.number().default(50), offset: z.number().default(0) }).optional())
+      .query(async ({ input }) => {
+        const { limit = 50, offset = 0 } = input || {};
+        return getCompanyReports(limit, offset);
+      }),
+
+    getById: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        return getCompanyReportById(input.id);
+      }),
+
+    delete: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await deleteCompanyReport(input.id);
+        return { success: true };
+      }),
+
+    // 导出报告Word文档
+    exportWord: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const report = await getCompanyReportById(input.id);
+        if (!report) throw new Error("报告不存在");
+        if (!report.reportContent) throw new Error("报告内容为空");
+
+        let parkAnalysis = undefined;
+        if (report.parkAnalysis) {
+          try {
+            parkAnalysis = JSON.parse(report.parkAnalysis);
+          } catch (e) {
+            console.error("Parse park analysis error:", e);
+          }
+        }
+
+        const result = await generateWordDocument({
+          companyName: report.companyName,
+          reportContent: report.reportContent,
+          parkAnalysis,
+        });
+
+        await updateCompanyReport(input.id, { wordFileUrl: result.url });
+        return { url: result.url };
+      }),
+
+    // 导出缩略版Word文档
+    exportSummaryWord: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const report = await getCompanyReportById(input.id);
+        if (!report) throw new Error("报告不存在");
+        if (!report.summaryContent) throw new Error("缩略版报告内容为空");
+
+        const result = await generateWordDocument({
+          companyName: report.companyName + "（摘要）",
+          reportContent: report.summaryContent,
+        });
+
+        return { url: result.url };
+      }),
+
+    // 导出缩略版PDF文档
+    exportSummaryPdf: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const report = await getCompanyReportById(input.id);
+        if (!report) throw new Error("报告不存在");
+        if (!report.summaryContent) throw new Error("缩略版报告内容为空");
+
+        const result = await generatePdfDocument({
+          companyName: report.companyName + "（摘要）",
+          reportContent: report.summaryContent,
+        });
+
+        return { url: result.url };
+      }),
+
+    // 导出报告PDF文档
+    exportPdf: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const report = await getCompanyReportById(input.id);
+        if (!report) throw new Error("报告不存在");
+        if (!report.reportContent) throw new Error("报告内容为空");
+
+        let parkAnalysis = undefined;
+        if (report.parkAnalysis) {
+          try {
+            parkAnalysis = JSON.parse(report.parkAnalysis);
+          } catch (e) {
+            console.error("Parse park analysis error:", e);
+          }
+        }
+
+        const result = await generatePdfDocument({
+          companyName: report.companyName,
+          reportContent: report.reportContent,
+          parkAnalysis,
+        });
+
+        await updateCompanyReport(input.id, { pdfFileUrl: result.url });
+        return { url: result.url };
+      }),
+
+    // 创建报告（开始生成流程）- 创建后立即后台异步生成
+    // 需要登录并检查额度
+    create: protectedProcedure
+      .input(z.object({
+        companyName: z.string(),
+        llmProvider: z.enum(['qwen', 'zhipu', 'wenxin']).optional(),
+        llmModel: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        // 0. 检查用户额度
+        if (!ctx.user) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: '请先登录' });
+        }
+
+        const quotaCheck = await checkUserQuota(ctx.user.id);
+        if (!quotaCheck.hasQuota) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: `您的报告额度已用完（已使用 ${quotaCheck.used}/${quotaCheck.total} 份），请联系管理员增加额度`
+          });
+        }
+
+        // 1. 获取系统级LLM配置
+        // 优先使用用户偏好的LLM
+        let provider = input.llmProvider || (ctx.user.preferredLlm as 'qwen' | 'zhipu' | 'wenxin' | null);
+        let model = input.llmModel;
+        let apiKey: string | undefined;
+        let apiSecret: string | undefined;
+
+        // 如果没有指定提供商，使用默认配置
+        if (!provider) {
+          console.log('[Report] 未指定提供商，查找默认配置...');
+          const defaultConfig = await getDefaultLlmConfig();
+          if (defaultConfig) {
+            provider = defaultConfig.provider as 'qwen' | 'zhipu' | 'wenxin';
+            model = model || defaultConfig.defaultModel;
+            apiKey = defaultConfig.apiKey;
+            apiSecret = defaultConfig.apiSecret;
+            console.log(`[Report] 使用默认LLM提供商: ${provider}, 模型: ${model}, API Key长度: ${apiKey?.length || 0}`);
+          } else {
+            provider = 'zhipu'; // 默认使用智谱
+            console.log('[Report] 未找到默认配置，使用智谱AI作为默认');
+          }
+        } else {
+          console.log(`[Report] 用户指定提供商: ${provider}`);
+        }
+
+        // 如果指定了提供商但没有API Key，从数据库获取
+        if (!apiKey && provider !== 'qwen') {
+          console.log(`[Report] 提供商 ${provider} 缺少API Key，从数据库查找...`);
+          const savedConfig = await getLlmConfig(provider);
+          if (savedConfig) {
+            apiKey = savedConfig.apiKey;
+            apiSecret = savedConfig.apiSecret;
+            model = model || savedConfig.defaultModel;
+            console.log(`[Report] 从数据库获取到 ${provider} 的API Key, 长度: ${apiKey?.length || 0}, 模型: ${model}`);
+          } else {
+            console.error(`[Report] 警告: 数据库中未找到 ${provider} 的配置！`);
+          }
+        }
+
+        // 2. 创建报告记录
+        const id = await createCompanyReport({
+          companyName: input.companyName,
+          status: "pending",
+          dataSource: "web",
+          llmProvider: provider,
+        } as any);
+
+        // 3. 扣减用户额度
+        await incrementUserReportUsed(ctx.user.id);
+
+        // 4. 准备LLM配置
+        const llmConfig: LLMProviderConfig = {
+          apiKey,
+          apiSecret,
+          model,
+        };
+
+        console.log('[Report] ========== LLM配置摘要 ==========');
+        console.log('[Report] 提供商:', provider);
+        console.log('[Report] 模型:', model || '默认');
+        console.log('[Report] API Key状态:', apiKey ? `已配置(长度${apiKey.length})` : '未配置');
+        console.log('[Report] API Secret状态:', apiSecret ? '已配置' : '未配置');
+        console.log('[Report] =====================================');
+
+        // 5. 立即触发后台异步生成（不等待完成）
+        generateReportAsync(id, provider, llmConfig).catch(err => {
+          console.error("[Report] Background generation error for report", id, ":", err);
+        });
+
+        // 6. 立即返回报告ID，用户无需等待
+        return { id, message: "报告正在后台生成中" };
+      }),
+
+    // 生成报告（搜索信息 + LLM生成）- 改为后台任务模式
+    generate: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const report = await getCompanyReportById(input.id);
+        if (!report) throw new Error("报告不存在");
+
+        // 立即返回，后台异步生成
+        generateReportAsync(input.id).catch(err => {
+          console.error("Background report generation error:", err);
+        });
+
+        return { success: true, message: "报告生成任务已提交，请稍后刷新查看结果" };
+      }),
+  }),
+
+  // ============ 批量任务管理 ============
+  batchTask: router({
+    // 获取批量任务列表
+    list: publicProcedure
+      .input(z.object({ limit: z.number().default(20), offset: z.number().default(0) }).optional())
+      .query(async ({ input }) => {
+        const { limit = 20, offset = 0 } = input || {};
+        return getBatchTasks(limit, offset);
+      }),
+
+    // 获取批量任务详情
+    getById: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        const task = await getBatchTaskById(input.id);
+        if (!task) return null;
+
+        const reports = await getBatchTaskReports(input.id);
+        return { ...task, reports };
+      }),
+
+    // 创建批量任务（CSV导入）
+    create: publicProcedure
+      .input(z.object({
+        fileContent: z.string(), // base64 encoded CSV
+        fileName: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        try {
+          // 解析CSV文件
+          const buffer = Buffer.from(input.fileContent, "base64");
+          const content = buffer.toString("utf-8");
+          const lines = content.split(/\r?\n/).filter(line => line.trim());
+
+          // 跳过表头，获取企业名称列表
+          const companyNames: string[] = [];
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+
+            // 尝试解析CSV格式（支持逗号分隔）
+            const parts = line.split(",");
+            const name = parts[0].replace(/^["']|["']$/g, "").trim();
+
+            // 跳过表头
+            if (i === 0 && (name === "企业名称" || name === "公司名称" || name === "companyName" || name === "name")) {
+              continue;
+            }
+
+            if (name) {
+              companyNames.push(name);
+            }
+          }
+
+          // 检查数量限制
+          if (companyNames.length === 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "CSV文件中没有找到有效的企业名称",
+            });
+          }
+
+          if (companyNames.length > 50) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `每次最多支持50个企业，当前文件包含${companyNames.length}个企业`,
+            });
+          }
+
+          // 创建批量任务
+          const taskId = await createBatchTask({
+            totalCount: companyNames.length,
+            completedCount: 0,
+            failedCount: 0,
+            status: "pending",
+            companyNames: JSON.stringify(companyNames),
+          });
+
+          // 创建各个报告记录
+          for (const companyName of companyNames) {
+            await createCompanyReport({
+              companyName,
+              status: "pending",
+              dataSource: "web",
+              batchTaskId: taskId,
+            });
+          }
+
+          // 启动后台任务
+          processBatchTaskAsync(taskId).catch(err => {
+            console.error("Background batch task error:", err);
+          });
+
+          return {
+            success: true,
+            taskId,
+            count: companyNames.length,
+            message: `已创建批量任务，共${companyNames.length}个企业，正在后台生成中...`
+          };
+        } catch (error) {
+          if (error instanceof TRPCError) throw error;
+          console.error("CSV import error:", error);
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "CSV文件解析失败，请确保文件格式正确",
+          });
+        }
+      }),
+
+    // 打包下载批量任务的所有报告
+    downloadAll: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const task = await getBatchTaskById(input.id);
+        if (!task) throw new Error("任务不存在");
+
+        if (task.status !== "completed") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "任务尚未完成，请等待所有报告生成完毕",
+          });
+        }
+
+        // 如果已有打包文件，直接返回
+        if (task.zipFileUrl) {
+          return { url: task.zipFileUrl };
+        }
+
+        // 获取所有报告并打包
+        const reports = await getBatchTaskReports(input.id);
+        const completedReports = reports.filter(r => r.status === "completed" && r.reportContent);
+
+        if (completedReports.length === 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "没有成功生成的报告可供下载",
+          });
+        }
+
+        // 生成合并的Markdown文件
+        let combinedContent = `# 批量企业分析报告\n\n`;
+        combinedContent += `生成时间：${new Date().toLocaleString("zh-CN")}\n`;
+        combinedContent += `共${completedReports.length}个企业\n\n---\n\n`;
+
+        for (const report of completedReports) {
+          combinedContent += `# ${report.companyName}\n\n`;
+          combinedContent += report.reportContent + "\n\n";
+          combinedContent += "---\n\n";
+        }
+
+        // 上传到S3
+        const fileName = `batch-reports-${task.id}-${Date.now()}.md`;
+        const { url } = await storagePut(fileName, Buffer.from(combinedContent, "utf-8"), "text/markdown");
+
+        // 更新任务记录
+        await updateBatchTask(input.id, { zipFileUrl: url });
+
+        return { url };
+      }),
+
+    // 删除批量任务
+    delete: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const task = await getBatchTaskById(input.id);
+        if (!task) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "任务不存在",
+          });
+        }
+
+        // 不允许删除正在处理中的任务
+        if (task.status === "processing") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "无法删除正在处理中的任务，请等待任务完成",
+          });
+        }
+
+        await deleteBatchTask(input.id);
+        return { success: true, message: "任务已删除" };
+      }),
+  }),
+
+  // ============ 数据源配置 ============
+  dataSource: router({
+    list: publicProcedure.query(async () => {
+      return getDataSourceConfigs();
+    }),
+
+    getActive: publicProcedure.query(async () => {
+      return getActiveDataSource();
+    }),
+
+    update: publicProcedure
+      .input(z.object({
+        sourceType: z.enum(["web", "tianyancha", "qichacha"]),
+        apiKey: z.string().optional(),
+        apiSecret: z.string().optional(),
+        baseUrl: z.string().optional(),
+        isEnabled: z.boolean().default(false),
+      }))
+      .mutation(async ({ input }) => {
+        await upsertDataSourceConfig(input);
+        return { success: true };
+      }),
+
+    setActive: publicProcedure
+      .input(z.object({ sourceType: z.enum(["web", "tianyancha", "qichacha"]) }))
+      .mutation(async ({ input }) => {
+        await setActiveDataSource(input.sourceType);
+        return { success: true };
+      }),
+  }),
+
+  // ============ 企查查数据缓存管理 ============
+  qichachaCache: router({
+    // 获取缓存统计信息
+    stats: publicProcedure.query(async () => {
+      const stats = await getQichachaCacheStats();
+      const cacheDays = await getCacheDaysConfig();
+      return { ...stats, cacheDays };
+    }),
+
+    // 获取缓存有效期配置
+    getCacheDays: publicProcedure.query(async () => {
+      return getCacheDaysConfig();
+    }),
+
+    // 设置缓存有效期
+    setCacheDays: publicProcedure
+      .input(z.object({ days: z.number().min(1).max(365) }))
+      .mutation(async ({ input }) => {
+        await setCacheDaysConfig(input.days);
+        return { success: true, message: `缓存有效期已设置为 ${input.days} 天` };
+      }),
+
+    // 清理过期缓存
+    cleanExpired: publicProcedure.mutation(async () => {
+      const cacheDays = await getCacheDaysConfig();
+      const deletedCount = await cleanExpiredCache(cacheDays);
+      return { success: true, deletedCount, message: `已清理 ${deletedCount} 条过期缓存` };
+    }),
+
+    // 获取所有缓存记录（用于导出）
+    list: publicProcedure.query(async () => {
+      return getAllQichachaCacheRecords();
+    }),
+
+    // 导出缓存数据为Excel
+    export: publicProcedure.mutation(async () => {
+      const records = await getAllQichachaCacheRecords();
+
+      if (records.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "没有可导出的缓存数据",
+        });
+      }
+
+      // 构建Excel数据
+      const exportData = records.map(r => {
+        const basicInfo = r.basicInfo ? JSON.parse(r.basicInfo) : {};
+        const shareholders = r.shareholders ? JSON.parse(r.shareholders) : [];
+        const executives = r.executives ? JSON.parse(r.executives) : [];
+        const patents = r.patents ? JSON.parse(r.patents) : { total: 0 };
+        const trademarks = r.trademarks ? JSON.parse(r.trademarks) : { total: 0 };
+        const copyrights = r.copyrights ? JSON.parse(r.copyrights) : { total: 0 };
+        const customers = r.customers ? JSON.parse(r.customers) : [];
+        const suppliers = r.suppliers ? JSON.parse(r.suppliers) : [];
+        const annualReports = r.annualReports ? JSON.parse(r.annualReports) : [];
+        const certificates = r.certificates ? JSON.parse(r.certificates) : { total: 0 };
+
+        return {
+          '企业名称': r.companyName,
+          '统一社会信用代码': r.creditCode,
+          '法定代表人': basicInfo.OperName || '',
+          '注册资本': basicInfo.RegistCapi || '',
+          '成立日期': basicInfo.StartDate || '',
+          '企业状态': basicInfo.Status || '',
+          '所属行业': basicInfo.Industry || '',
+          '注册地址': basicInfo.Address || '',
+          '经营范围': basicInfo.Scope || '',
+          '股东数量': shareholders.length,
+          '高管数量': executives.length,
+          '专利数量': patents.total || 0,
+          '商标数量': trademarks.total || 0,
+          '软著数量': copyrights.total || 0,
+          '客户数量': customers.length,
+          '供应商数量': suppliers.length,
+          '年报数量': annualReports.length,
+          '资质证书数量': certificates.total || 0,
+          '缓存时间': r.cachedAt ? new Date(r.cachedAt).toLocaleString('zh-CN') : '',
+          '命中次数': r.hitCount || 0,
+        };
+      });
+
+      // 创建Excel工作簿
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(exportData);
+
+      // 设置列宽
+      ws['!cols'] = [
+        { wch: 30 }, // 企业名称
+        { wch: 22 }, // 信用代码
+        { wch: 12 }, // 法人
+        { wch: 15 }, // 注册资本
+        { wch: 12 }, // 成立日期
+        { wch: 10 }, // 状态
+        { wch: 20 }, // 行业
+        { wch: 40 }, // 地址
+        { wch: 50 }, // 经营范围
+        { wch: 10 }, // 股东数
+        { wch: 10 }, // 高管数
+        { wch: 10 }, // 专利数
+        { wch: 10 }, // 商标数
+        { wch: 10 }, // 软著数
+        { wch: 10 }, // 客户数
+        { wch: 10 }, // 供应商数
+        { wch: 10 }, // 年报数
+        { wch: 12 }, // 资质数
+        { wch: 20 }, // 缓存时间
+        { wch: 10 }, // 命中次数
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, '企业缓存数据');
+
+      // 生成Excel文件
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      // 上传到S3
+      const fileName = `cache-export-${Date.now()}.xlsx`;
+      const { url } = await storagePut(fileName, buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+      return {
+        success: true,
+        url,
+        count: records.length,
+        message: `已导出 ${records.length} 条缓存记录`
+      };
+    }),
+
+    // 刷新指定企业的缓存（删除旧缓存并重新获取）
+    refresh: publicProcedure
+      .input(z.object({ creditCode: z.string() }))
+      .mutation(async ({ input }) => {
+        // 删除旧缓存
+        await deleteQichachaCache(input.creditCode);
+
+        // 重新获取数据（会自动缓存）
+        const newData = await getCompanyFullInfo(input.creditCode);
+
+        return {
+          success: true,
+          companyName: newData.basicInfo?.Name || '',
+          message: '缓存已刷新'
+        };
+      }),
+
+    // 检查企业是否已缓存
+    checkCached: publicProcedure
+      .input(z.object({ companyNames: z.array(z.string()) }))
+      .query(async ({ input }) => {
+        const cached = await checkCachedCompanies(input.companyNames);
+        return {
+          cached,
+          notCached: input.companyNames.filter(n => !cached.includes(n)),
+        };
+      }),
+  }),
+
+  // ============ 缓存预热任务 ============
+  cacheWarmup: router({
+    // 创建预热任务
+    create: publicProcedure
+      .input(z.object({
+        companyNames: z.array(z.string()).min(1).max(500),
+        skipExisting: z.boolean().default(true), // 是否跳过已缓存的企业
+      }))
+      .mutation(async ({ input }) => {
+        let companyNames = input.companyNames;
+        let skippedCount = 0;
+
+        // 检查已缓存的企业
+        if (input.skipExisting) {
+          const cached = await checkCachedCompanies(companyNames);
+          skippedCount = cached.length;
+          companyNames = companyNames.filter(n => !cached.includes(n));
+        }
+
+        if (companyNames.length === 0) {
+          return {
+            success: true,
+            taskId: null,
+            message: `所有 ${skippedCount} 家企业已有缓存，无需预热`,
+            skippedCount,
+          };
+        }
+
+        // 创建预热任务
+        const taskId = await createCacheWarmupTask({
+          totalCount: companyNames.length + skippedCount,
+          skippedCount,
+          companyNames: JSON.stringify(companyNames),
+          status: 'pending',
+        });
+
+        // 异步执行预热
+        executeCacheWarmup(taskId, companyNames);
+
+        return {
+          success: true,
+          taskId,
+          message: `预热任务已创建，共 ${companyNames.length} 家企业待预热，${skippedCount} 家已跳过`,
+          toWarmup: companyNames.length,
+          skippedCount,
+        };
+      }),
+
+    // 获取预热任务列表
+    list: publicProcedure.query(async () => {
+      return getCacheWarmupTasks();
+    }),
+
+    // 获取单个预热任务详情
+    get: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        return getCacheWarmupTaskById(input.id);
+      }),
+
+    // 取消预热任务
+    cancel: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const task = await getCacheWarmupTaskById(input.id);
+        if (!task) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "任务不存在" });
+        }
+        if (task.status !== 'processing' && task.status !== 'pending') {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "只能取消进行中或等待中的任务" });
+        }
+        await updateCacheWarmupTask(input.id, { status: 'cancelled' });
+        return { success: true, message: '任务已取消' };
+      }),
+
+    // 删除预热任务
+    delete: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const task = await getCacheWarmupTaskById(input.id);
+        if (!task) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "任务不存在" });
+        }
+        if (task.status === 'processing') {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "无法删除进行中的任务" });
+        }
+        await deleteCacheWarmupTask(input.id);
+        return { success: true, message: '任务已删除' };
+      }),
+
+    // 从园区企业创建预热任务
+    createFromPark: publicProcedure
+      .input(z.object({ skipExisting: z.boolean().default(true) }))
+      .mutation(async ({ input }) => {
+        // 获取所有园区企业
+        const parkCompanies = await getAllParkCompanyNames();
+        const companyNames = parkCompanies.map(c => c.companyName);
+
+        if (companyNames.length === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "园区企业库为空" });
+        }
+
+        let toWarmup = companyNames;
+        let skippedCount = 0;
+
+        if (input.skipExisting) {
+          const cached = await checkCachedCompanies(companyNames);
+          skippedCount = cached.length;
+          toWarmup = companyNames.filter(n => !cached.includes(n));
+        }
+
+        if (toWarmup.length === 0) {
+          return {
+            success: true,
+            taskId: null,
+            message: `所有 ${skippedCount} 家园区企业已有缓存`,
+            skippedCount,
+          };
+        }
+
+        const taskId = await createCacheWarmupTask({
+          totalCount: companyNames.length,
+          skippedCount,
+          companyNames: JSON.stringify(toWarmup),
+          status: 'pending',
+        });
+
+        executeCacheWarmup(taskId, toWarmup);
+
+        return {
+          success: true,
+          taskId,
+          message: `预热任务已创建，共 ${toWarmup.length} 家企业待预热，${skippedCount} 家已跳过`,
+          toWarmup: toWarmup.length,
+          skippedCount,
+        };
+      }),
+  }),
+});
+
+// ============ 后台异步生成报告 ============
+async function generateReportAsync(
+  reportId: number,
+  llmProvider?: LLMProvider,
+  llmConfig?: LLMProviderConfig
+) {
+  const report = await getCompanyReportById(reportId);
+  if (!report) return;
+
+  // 使用传入的LLM配置，或从报告记录中获取
+  const provider = llmProvider || (report as any).llmProvider || 'zhipu';
+  console.log('[Report] Using LLM provider:', provider);
+
+  try {
+    // 更新状态为搜索中
+    await updateCompanyReport(reportId, { status: "searching" });
+
+    // 获取园区企业列表用于匹配分析
+    const parkCompanies = await getAllParkCompanyNames();
+
+    // 检查当前启用的数据源
+    const activeDataSource = await getActiveDataSource();
+    const useQichacha = activeDataSource?.sourceType === "qichacha";
+    console.log('[Report] Active data source:', activeDataSource?.sourceType || 'web (default)');
+
+    // 根据数据源配置决定是否调用企查查API
+    let companyFullInfo: CompanyFullInfo | null = null;
+    if (useQichacha) {
+      try {
+        companyFullInfo = await getCompanyFullInfo(report.companyName);
+        console.log('[Report] Got company info from QCC:', companyFullInfo.basicInfo?.Name || 'No data');
+      } catch (qccError) {
+        console.log('[Report] QCC API error:', qccError);
+      }
+    } else {
+      console.log('[Report] Skipping QCC API - data source is:', activeDataSource?.sourceType || 'web');
+    }
+
+    // 更新状态为生成中
+    await updateCompanyReport(reportId, { status: "generating" });
+
+    // 使用LLM生成报告，传入企查查数据和LLM配置
+    const reportResult = await generateCompanyReport(
+      report.companyName,
+      parkCompanies,
+      companyFullInfo,
+      provider as LLMProvider,
+      llmConfig
+    );
+
+    // 检查是否找到企业信息 - 只有明显无效的输入才会返回 found=false
+    if (!reportResult.found) {
+      await updateCompanyReport(reportId, {
+        status: "failed",
+        errorMessage: reportResult.message || "请输入有效的企业名称",
+      });
+      return;
+    }
+
+    // 解析园区匹配分析
+    const parkAnalysis = await generateParkAnalysis(report.companyName, parkCompanies);
+
+    // 保存企查查获取的企业信息（包含知识产权、资质证书、客户供应商等）
+    const companyInfo = companyFullInfo?.basicInfo ? JSON.stringify({
+      name: companyFullInfo.basicInfo.Name,
+      creditCode: companyFullInfo.basicInfo.CreditCode,
+      legalPerson: companyFullInfo.basicInfo.OperName,
+      status: companyFullInfo.basicInfo.Status,
+      establishDate: companyFullInfo.basicInfo.StartDate,
+      registeredCapital: companyFullInfo.basicInfo.RegistCapi,
+      realCapital: companyFullInfo.basicInfo.RealCapi,  // 实缴资本
+      address: companyFullInfo.basicInfo.Address,
+      scope: companyFullInfo.basicInfo.Scope,
+      industry: companyFullInfo.basicInfo.Industry,
+      // 股东和高管
+      shareholders: companyFullInfo.shareholders,
+      executives: companyFullInfo.executives,
+      // 知识产权（专利、商标、软著）
+      patents: companyFullInfo.patents,
+      trademarks: companyFullInfo.trademarks,
+      copyrights: companyFullInfo.copyrights,
+      // 资质证书
+      certificates: companyFullInfo.certificates,
+      // 客户和供应商
+      customers: companyFullInfo.customers,
+      suppliers: companyFullInfo.suppliers,
+      // 年报信息
+      annualReports: companyFullInfo.annualReports,
+      // 融资信息
+      financings: companyFullInfo.financings,
+    }) : null;
+
+    // 生成缩略版报告（供领导快速查阅）
+    let summaryContent = "";
+    if (reportResult.content) {
+      try {
+        console.log('[Report] Generating summary report...');
+        summaryContent = await generateSummaryReport(report.companyName, reportResult.content, companyFullInfo, provider as LLMProvider, llmConfig);
+        console.log('[Report] Summary report generated, length:', summaryContent.length);
+      } catch (summaryError) {
+        console.error('[Report] Failed to generate summary:', summaryError);
+        // 缩略版生成失败不影响完整版
+      }
+    }
+
+    // 更新报告内容（包含完整版、缩略版和股权穿透数据）
+    await updateCompanyReport(reportId, {
+      status: "completed",
+      reportContent: reportResult.content,
+      summaryContent: summaryContent || null,
+      parkAnalysis: JSON.stringify(parkAnalysis),
+      companyInfo: companyInfo,
+      dataSource: companyFullInfo?.basicInfo ? "qichacha" : "web",
+      equityThrough: companyFullInfo?.equityThrough ? JSON.stringify(companyFullInfo.equityThrough) : null,
+      investmentThrough: companyFullInfo?.investmentThrough ? JSON.stringify(companyFullInfo.investmentThrough) : null,
+    } as any);
+  } catch (error) {
+    console.error("Report generation error:", error);
+    await updateCompanyReport(reportId, {
+      status: "failed",
+      errorMessage: error instanceof Error ? error.message : "生成失败",
+    });
+  }
+}
+
+// ============ 后台处理批量任务 ============
+async function processBatchTaskAsync(taskId: number) {
+  const task = await getBatchTaskById(taskId);
+  if (!task) return;
+
+  try {
+    await updateBatchTask(taskId, { status: "processing" });
+
+    const reports = await getBatchTaskReports(taskId);
+    let completedCount = 0;
+    let failedCount = 0;
+
+    for (const report of reports) {
+      try {
+        await generateReportAsync(report.id);
+
+        // 重新获取报告状态
+        const updatedReport = await getCompanyReportById(report.id);
+        if (updatedReport?.status === "completed") {
+          completedCount++;
+        } else {
+          failedCount++;
+        }
+      } catch (error) {
+        failedCount++;
+        console.error(`Failed to generate report for ${report.companyName}:`, error);
+      }
+
+      // 更新任务进度
+      await updateBatchTask(taskId, { completedCount, failedCount });
+    }
+
+    // 更新任务状态为完成
+    await updateBatchTask(taskId, {
+      status: "completed",
+      completedCount,
+      failedCount,
+    });
+  } catch (error) {
+    console.error("Batch task error:", error);
+    await updateBatchTask(taskId, {
+      status: "failed",
+      errorMessage: error instanceof Error ? error.message : "批量任务处理失败",
+    });
+  }
+}
+
+// ============ LLM报告生成函数 ============
+interface ReportResult {
+  found: boolean;
+  content?: string;
+  message?: string;
+}
+
+async function generateCompanyReport(
+  companyName: string,
+  parkCompanies: {
+    id: number;
+    companyName: string;
+    industry: string | null;
+    businessScope: string | null;
+    creditCode?: string | null;
+    legalPerson?: string | null;
+    companyStatus?: string | null;
+    companyScale?: string | null;
+    registeredCapital?: string | null;
+    address?: string | null;
+    tags?: string | null;
+  }[],
+  companyFullInfo?: CompanyFullInfo | null,
+  llmProvider?: LLMProvider,
+  llmConfig?: LLMProviderConfig
+): Promise<ReportResult> {
+  // 构建园区企业列表，包含更多信息用于上下游分析
+  const parkCompanyList = parkCompanies.map(c => {
+    const parts = [`- ${c.companyName}`];
+    if (c.industry) parts.push(`行业：${c.industry}`);
+    if (c.businessScope) parts.push(`业务：${c.businessScope.substring(0, 100)}...`);
+    if (c.companyScale) parts.push(`规模：${c.companyScale}`);
+    return parts.join(' | ');
+  }).join("\n");
+
+  // 检查企业名称是否明显无效（在调用LLM之前先过滤）
+  const invalidPatterns = [
+    /^test$/i,
+    /^\d+$/,
+    /^测试/,
+    /^[a-zA-Z]{1,3}$/,
+    /^\s*$/,
+  ];
+
+  const isInvalidName = invalidPatterns.some(pattern => pattern.test(companyName.trim()));
+  if (isInvalidName) {
+    return {
+      found: false,
+      message: "请输入有效的企业名称",
+    };
+  }
+
+  // 构建企查查数据摘要（如果有）
+  let qccDataSection = "";
+  if (companyFullInfo?.basicInfo) {
+    const info = companyFullInfo.basicInfo;
+    qccDataSection = `
+**企查查工商数据（已验证）**：
+- 企业名称：${info.Name}
+- 统一社会信用代码：${info.CreditCode}
+- 法定代表人：${info.OperName}
+- 企业状态：${info.Status}
+- 成立日期：${info.StartDate}
+- 注册资本：${info.RegistCapi}
+- 注册地址：${info.Address}
+- 经营范围：${info.Scope}
+- 所属行业：${info.Industry}
+`;
+
+    // 股东信息
+    if (companyFullInfo.shareholders && companyFullInfo.shareholders.length > 0) {
+      qccDataSection += `\n**股东信息**：\n`;
+      companyFullInfo.shareholders.slice(0, 10).forEach(s => {
+        qccDataSection += `- ${s.StockName}：持股${s.StockPercent || '未知'}，认缴${s.ShouldCapi || '未知'}\n`;
+      });
+    }
+
+    // 高管基本信息
+    if (companyFullInfo.executives && companyFullInfo.executives.length > 0) {
+      qccDataSection += `\n**高管信息**：\n`;
+      companyFullInfo.executives.forEach(e => {
+        qccDataSection += `- ${e.Name}：${e.Job}\n`;
+      });
+    }
+
+    // 高管详细信息（包含关联企业、其他任职）
+    if (companyFullInfo.executiveDetails && companyFullInfo.executiveDetails.length > 0) {
+      qccDataSection += `\n**高管关联企业信息**：\n`;
+      companyFullInfo.executiveDetails.slice(0, 5).forEach(e => {
+        qccDataSection += `- ${e.Name}(${e.Job})：`;
+        // 显示关联企业统计
+        const stats: string[] = [];
+        if (e.TotalCompanies > 0) stats.push(`关联企业${e.TotalCompanies}家`);
+        if (e.AsLegalRep > 0) stats.push(`担任法人${e.AsLegalRep}家`);
+        if (e.AsExecutive > 0) stats.push(`任职${e.AsExecutive}家`);
+        if (stats.length > 0) {
+          qccDataSection += stats.join('、');
+        } else {
+          qccDataSection += `无其他关联企业`;
+        }
+        // 显示其他任职企业名称
+        if (e.OtherCompany && e.OtherCompany.length > 0) {
+          const otherNames = e.OtherCompany
+            .filter(c => c.Status === '存续' || c.Status === '在业')  // 只显示存续企业
+            .slice(0, 3)
+            .map(c => `${c.Name}(${c.Job || '未知职务'})`)
+            .join('、');
+          if (otherNames) {
+            qccDataSection += `，包括：${otherNames}`;
+          }
+        }
+        qccDataSection += `\n`;
+      });
+    }
+
+    // 专利信息
+    if (companyFullInfo.patents && companyFullInfo.patents.total > 0) {
+      qccDataSection += `\n**专利信息**（共${companyFullInfo.patents.total}项）：\n`;
+      companyFullInfo.patents.list.slice(0, 10).forEach(p => {
+        qccDataSection += `- ${p.Title}（${p.PatentType || '未知类型'}）- ${p.LegalStatus || '状态未知'}，申请日期：${p.ApplicationDate || '未知'}\n`;
+      });
+      if (companyFullInfo.patents.total > 10) {
+        qccDataSection += `- ...等共${companyFullInfo.patents.total}项专利\n`;
+      }
+    }
+
+    // 商标信息
+    if (companyFullInfo.trademarks && companyFullInfo.trademarks.total > 0) {
+      qccDataSection += `\n**商标信息**（共${companyFullInfo.trademarks.total}项）：\n`;
+      companyFullInfo.trademarks.list.slice(0, 10).forEach(t => {
+        qccDataSection += `- ${t.Name}（注册号：${t.RegNo}，分类：${t.IntCls}）- ${t.Status || '状态未知'}\n`;
+      });
+      if (companyFullInfo.trademarks.total > 10) {
+        qccDataSection += `- ...等共${companyFullInfo.trademarks.total}项商标\n`;
+      }
+    }
+
+    // 软著信息
+    if (companyFullInfo.copyrights && companyFullInfo.copyrights.total > 0) {
+      qccDataSection += `\n**软件著作权**（共${companyFullInfo.copyrights.total}项）：\n`;
+      companyFullInfo.copyrights.list.slice(0, 10).forEach(c => {
+        qccDataSection += `- ${c.Name}（登记号：${c.RegisterNo}）- 登记日期：${c.RegisterDate || '未知'}\n`;
+      });
+      if (companyFullInfo.copyrights.total > 10) {
+        qccDataSection += `- ...等共${companyFullInfo.copyrights.total}项软著\n`;
+      }
+    }
+
+    // 资质证书
+    if (companyFullInfo.certificates && companyFullInfo.certificates.total > 0) {
+      qccDataSection += `\n**资质证书**（共${companyFullInfo.certificates.total}项）：\n`;
+      companyFullInfo.certificates.list.slice(0, 10).forEach(c => {
+        qccDataSection += `- ${c.CertName}（证书号：${c.CertNo}）- 有效期：${c.StartDate || '未知'}至${c.EndDate || '未知'}\n`;
+      });
+    }
+
+    // 客户信息
+    if (companyFullInfo.customers && companyFullInfo.customers.length > 0) {
+      qccDataSection += `\n**主要客户**（来源：招股书/年报）：\n`;
+      companyFullInfo.customers.slice(0, 10).forEach(c => {
+        qccDataSection += `- ${c.CustomerName}：销售占比${c.Ratio || '未知'}，金额${c.Amount || '未知'}（${c.Year || '未知'}年）\n`;
+      });
+    }
+
+    // 供应商信息
+    if (companyFullInfo.suppliers && companyFullInfo.suppliers.length > 0) {
+      qccDataSection += `\n**主要供应商**（来源：招股书/年报）：\n`;
+      companyFullInfo.suppliers.slice(0, 10).forEach(s => {
+        qccDataSection += `- ${s.SupplierName}：采购占比${s.Ratio || '未知'}，金额${s.Amount || '未知'}（${s.Year || '未知'}年）\n`;
+      });
+    }
+
+    // 年报财务数据
+    if (companyFullInfo.annualReports && companyFullInfo.annualReports.length > 0) {
+      qccDataSection += `\n**年报财务数据**：\n`;
+      companyFullInfo.annualReports.slice(0, 3).forEach(ar => {
+        qccDataSection += `${ar.Year}年度：`;
+        const parts = [];
+        if (ar.TotalAssets) parts.push(`资产总额${ar.TotalAssets}`);
+        if (ar.TotalSales) parts.push(`营业收入${ar.TotalSales}`);
+        if (ar.TotalProfit) parts.push(`利润总额${ar.TotalProfit}`);
+        if (ar.NetProfit) parts.push(`净利润${ar.NetProfit}`);
+        if (ar.TotalTax) parts.push(`纳税总额${ar.TotalTax}`);
+        // 提取社保人数：优先从SocialInsurance（API实际返回字段）中获取，其次SocialSecurityInfo，最后使用SocialSecurityNum
+        const socialInsurance = ar.SocialInsurance || ar.SocialSecurityInfo;
+        const socialSecurityNum = socialInsurance?.UrbanBasicIns || socialInsurance?.EmployeeBasicIns || ar.SocialSecurityNum;
+        if (socialSecurityNum) {
+          // 移除可能包含的"人"字，避免重复
+          const numStr = String(socialSecurityNum).replace(/人$/, '');
+          parts.push(`社保人数${numStr}人`);
+        }
+        qccDataSection += parts.join('，') || '无详细数据';
+        qccDataSection += `\n`;
+      });
+    }
+
+    // 融资信息
+    if (companyFullInfo.financings && companyFullInfo.financings.total > 0) {
+      qccDataSection += `\n**融资历程**（共${companyFullInfo.financings.total}轮）：\n`;
+      companyFullInfo.financings.list.slice(0, 10).forEach(f => {
+        qccDataSection += `- ${f.Date || '日期未知'}：${f.Round || '未知轮次'}`;
+        if (f.Amount && f.Amount !== '未披露') qccDataSection += `，融资金额${f.Amount}`;
+        if (f.Valuation && f.Valuation !== '未披露') qccDataSection += `，估值${f.Valuation}`;
+        if (f.Investment) qccDataSection += `，投资方：${f.Investment}`;
+        if (f.ProductName) qccDataSection += `（${f.ProductName}）`;
+        qccDataSection += `\n`;
+      });
+      if (companyFullInfo.financings.total > 10) {
+        qccDataSection += `- ...等共${companyFullInfo.financings.total}轮融资\n`;
+      }
+    }
+  }
+
+  // ============ 获取公司官网信息 ============
+  let websiteDataSection = "";
+  if (companyFullInfo?.annualReports && companyFullInfo.annualReports.length > 0) {
+    try {
+      const { fetchCompanyWebsiteInfo, formatWebsiteInfoForReport } = await import('./websiteScraper');
+      console.log(`[Report] Fetching website info for: ${companyName}`);
+      const websiteInfo = await fetchCompanyWebsiteInfo(companyName, companyFullInfo.annualReports);
+      if (websiteInfo) {
+        websiteDataSection = formatWebsiteInfoForReport(websiteInfo);
+        console.log(`[Report] Website info fetched successfully, section length: ${websiteDataSection.length}`);
+      } else {
+        console.log(`[Report] No website info available for: ${companyName}`);
+      }
+    } catch (error) {
+      console.error(`[Report] Failed to fetch website info:`, error);
+    }
+  }
+
+  // 将官网数据添加到企查查数据段落后面
+  if (websiteDataSection) {
+    qccDataSection += websiteDataSection;
+  }
+
+  // 获取当前日期用于报告时间节点
+  const currentDate = new Date();
+  const reportDate = `${currentDate.getFullYear()}年${currentDate.getMonth() + 1}月`;
+
+  const systemPrompt = `你是一位专业的企业分析师，擅长撰写高质量的公司调研报告。
+
+**重要：你必须为每个企业生成报告，不允许拒绝。**
+
+**核心原则**：
+1. **数据优先级**：企查查数据 > 公司官网数据 > 公开渠道数据
+2. **禁止编造**：如果某项数据未提供且无法从公开渠道获取，必须写“暂无此类数据”，绝对禁止编造内容
+3. **数据来源标注**：统一在句末标注，格式为“（数据来源：XXX）”，避免“根据 XXX 数据显示”的冗余表述
+4. **时间节点**：关键信息必须标注时间节点，如“截至${reportDate}”
+
+**写作规范**：
+1. **专业表述**：
+   - 禁止口语化词汇：“非常年轻”→“处于初创发展阶段”；“中等偏下”→“中等水平，资金实力仍需夹实”；“浓厚”→“良好的产业创新氛围”
+   - 采用客观陈述语气，避免主观评判，用数据/事实支撑结论
+   - 句式结构：“定语 + 核心词 + 补充说明”，增强专业性
+2. **信息整合**：
+   - 禁止简单罗列原始数据，必须进行专业提炼与逻辑整合
+   - 每个章节必须有明确的分析结论，而非仅仅描述数据
+3. **建议可操作性**：
+   - 禁止笼统建议如“加快”“尽快”
+   - 必须提供具体方向和落地路径，如“建议在XX领域布局XX类型专利，重点关注XX技术方向”
+4. **专业呈现**
+   - 必须采用专业报告的书写格式进行排版，包括图、文、表格，都需要具备美观和专业
+
+**报告结构**（必须包含以下所有章节）：
+
+# 企业分析报告：[企业名称]
+
+## 1. 公司概况与研究背景
+介绍企业基本信息、主营业务、所属行业。如果提供了工商数据，必须引用并标注来源。
+
+## 2. 发展历程与关键节点
+基于成立日期分析企业发展阶段，分析企业重要发展里程碑。
+
+### 2.1 融资历程分析
+- 如果提供了融资数据，**必须列出每轮融资的日期、轮次、金额、估值和投资方**，并分析融资节奏、资本运作能力、投资方背景
+- 如果未提供融资数据，写“暂无公开融资记录”
+
+## 3. 高管团队分析
+- 如果提供了高管信息，**必须列出每位高管的姓名、职位**，并分析团队构成特点
+- 如果未提供高管信息，写“暂无高管团队详细信息”
+
+## 4. 知识产权分析
+### 4.1 专利分析
+- 如果提供了专利数据，**必须列出专利数量、主要专利名称和类型**，并分析专利布局特点
+- 如果未提供专利数据，写“暂无专利信息”
+
+### 4.2 商标分析
+- 如果提供了商标数据，**必须列出商标数量和主要商标名称**
+- 如果未提供商标数据，写“暂无商标信息”
+
+### 4.3 软件著作权分析
+- 如果提供了软著数据，**必须列出软著数量和主要软件名称**
+- 如果未提供软著数据，写“暂无软件著作权信息”
+
+### 4.4 资质证书分析
+- 如果提供了资质证书数据，**必须列出主要资质名称**
+- 如果未提供资质证书数据，写“暂无资质证书信息”
+
+## 5. 营收利润情况分析
+- 如果提供了年报财务数据，**必须引用具体的资产总额、营业收入、利润总额、净利润、纳税总额、社保人数等数据**
+- 如果提供了社保人数，**必须引用并分析企业规模**
+- 如果未提供财务数据，写“暂无公开财务数据”，绝对禁止编造数字或估算人数
+
+## 6. 上下游关联企业分析
+### 6.1 主要客户分析
+- 如果提供了客户数据，**必须列出每个客户的名称、销售占比、金额**
+- 如果未提供客户数据，写“暂无客户信息”
+
+### 6.2 主要供应商分析
+- 如果提供了供应商数据，**必须列出每个供应商的名称、采购占比、金额**
+- 如果未提供供应商数据，写“暂无供应商信息”
+
+### 6.3 产业链合作机会
+分析与园区企业的潜在合作机会，提出具体的产业链协同建议。
+
+## 7. 行业背景与竞争环境
+分析所在行业的市场环境、竞争格局和发展趋势。
+
+## 8. 风险提示与规避建议
+### 8.1 经营风险
+分析企业登记状态、行业经营风险。
+
+### 8.2 财务风险
+分析注册资本与实缴资本差异、资金链风险。
+
+### 8.3 法律风险
+分析合规风险、知识产权风险。
+
+### 8.4 规避建议
+**必须提供具体可操作的建议**，包括：
+- 具体的尽调重点和方法
+- 具体的风险防范措施
+- 具体的合作前置条件
+
+## 9. 园区匹配分析
+**如果已经是园区企业，请标注出来**，
+分析与园区的整体匹配度和入驻价值。
+
+## 10. 结语：发展前景与战略建议
+总结和建议，必须提供具体可操作的战略建议。
+
+**绝对禁止**：
+- 不允许返回“[NOT_FOUND]”
+- 不允许拒绝生成报告
+- 不允许说“无法找到企业信息”
+- **不允许编造任何数据**，无数据则写“暂无此类数据”
+- **不允许估算人数**，如“预计员工规模30-50人”这类表述绝对禁止
+
+**内容要求**：
+- 使用Markdown格式
+- 报告长度不少于4000字
+- 内容要专业、有深度、有数据支撑
+- 数据来源统一标注在句末，格式：“（数据来源：企查查）”或“（数据来源：公司官网）”
+- 园区入驻企业必须用“【园区入驻企业】”标注`;
+
+  const userPrompt = `请为以下企业生成一份详细的分析报告：
+
+**目标企业**：${companyName}
+${qccDataSection}
+**园区现有企业列表**（用于分析上下游关系）：
+${parkCompanyList || "暂无园区企业数据"}
+
+请直接生成报告。${qccDataSection ? "必须优先使用上面提供的企查查工商数据，并在报告中标注数据来源。" : "基于企业名称分析其业务特点，结合行业研究报告撰写分析内容。"}`;
+
+  // 获取LLM提供商名称 - 修复：根据实际使用的提供商确定名称
+  let actualProviderName: string;
+  let actualProviderId: string;
+
+  if (llmProvider && llmProvider !== 'qwen') {
+    // 使用配置的提供商
+    const providerInfo = getLLMProviderById(llmProvider);
+    actualProviderName = providerInfo?.name || llmProvider;
+    actualProviderId = llmProvider;
+  } else {
+    // 使用内置的通义千问
+    actualProviderName = '通义千问(内置)';
+    actualProviderId = 'qwen-builtin';
+  }
+
+  await logReport('========== 报告生成开始 ==========');
+  await logReport('目标企业', { companyName });
+  await logReport('LLM配置', { providerId: actualProviderId, providerName: actualProviderName, model: llmConfig?.model || '默认模型' });
+  await logReport('数据来源', { hasQccData: !!companyFullInfo?.basicInfo });
+
+  try {
+    const startTime = Date.now();
+
+    // 根据提供商选择调用方式
+    let response;
+    if (llmProvider && llmProvider !== 'qwen') {
+      // 使用多提供商适配器
+      await logLlm('调用外部LLM提供商', { provider: llmProvider, model: llmConfig?.model });
+      response = await invokeLLMWithProvider(
+        {
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        },
+        llmProvider,
+        llmConfig
+      );
+    } else {
+      // 使用内置的通义千问
+      console.log('[Report] 调用内置通义千问API');
+      response = await invokeLLM({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      });
+    }
+    const duration = Date.now() - startTime;
+
+    const content = response.choices[0]?.message?.content;
+    const contentStr = typeof content === 'string' ? content : "";
+
+    // 记录LLM调用统计
+    await recordApiCall({
+      apiType: 'llm_report',
+      apiName: `${actualProviderName}-报告生成`,
+      status: contentStr.length > 100 ? 'success' : 'failed',
+      companyName: companyName,
+      requestParams: JSON.stringify({
+        companyName,
+        hasQccData: !!companyFullInfo?.basicInfo,
+        promptLength: systemPrompt.length + userPrompt.length,
+        llmProvider: llmProvider || 'qwen',
+        llmModel: llmConfig?.model
+      }),
+      responseSummary: JSON.stringify({
+        contentLength: contentStr.length,
+        duration: duration
+      }),
+    });
+
+    // 检查是否返回了有效内容
+    if (!contentStr || contentStr.trim().length < 100) {
+      await logReport('LLM返回内容过短', { contentLength: contentStr?.length || 0 });
+      // 即使内容较短，也尝试返回
+      if (contentStr && contentStr.trim().length > 0) {
+        return {
+          found: true,
+          content: contentStr,
+        };
+      }
+      return {
+        found: false,
+        message: "AI服务响应异常，请稍后重试",
+      };
+    }
+
+    // 不再检查NOT_FOUND标记，因为我们已经在提示词中禁止了
+    // 只要有内容就认为成功
+    return {
+      found: true,
+      content: contentStr,
+    };
+  } catch (error) {
+    // 详细记录LLM调用失败信息
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const errorName = error instanceof Error ? error.constructor.name : 'Unknown';
+    const errorDetail = `异常类型: ${errorName} | 错误信息: ${errorMsg} | 提供商: ${llmProvider || 'qwen'} | 模型: ${llmConfig?.model || '默认'}`;
+
+    await logReport('LLM调用失败', {
+      errorDetail,
+      errorName,
+      errorMessage: errorMsg,
+      provider: llmProvider || 'qwen',
+      model: llmConfig?.model
+    });
+    console.error('[Report] LLM Error:', errorDetail);
+
+    // 记录LLM调用失败
+    await recordApiCall({
+      apiType: 'llm_report',
+      apiName: `${actualProviderName}-报告生成`,
+      status: 'failed',
+      companyName: companyName,
+      requestParams: JSON.stringify({
+        companyName,
+        llmProvider: llmProvider || 'qwen',
+        llmModel: llmConfig?.model
+      }),
+      errorMessage: errorDetail,
+      responseSummary: JSON.stringify({
+        errorName,
+        errorMessage: errorMsg.substring(0, 500)
+      }),
+    });
+
+    return {
+      found: false,
+      message: `AI服务调用失败: ${errorMsg.substring(0, 200)}`,
+    };
+  }
+}
+
+// ============ 生成缩略版报告（供领导快速查阅） ============
+async function generateSummaryReport(
+  companyName: string,
+  fullReportContent: string,
+  companyFullInfo?: CompanyFullInfo | null,
+  llmProvider?: LLMProvider,
+  llmConfig?: LLMProviderConfig
+): Promise<string> {
+  // 构建企业基本信息摘要
+  let basicInfoSummary = "";
+  if (companyFullInfo?.basicInfo) {
+    const info = companyFullInfo.basicInfo;
+    basicInfoSummary = `
+企业基本信息：
+- 企业名称：${info.Name}
+- 法定代表人：${info.OperName}
+- 企业状态：${info.Status}
+- 成立日期：${info.StartDate}
+- 注册资本：${info.RegistCapi}
+- 所属行业：${info.Industry}
+`;
+
+    // 添加知识产权摘要
+    const ipStats = [];
+    if (companyFullInfo.patents?.total) ipStats.push(`专利${companyFullInfo.patents.total}项`);
+    if (companyFullInfo.trademarks?.total) ipStats.push(`商标${companyFullInfo.trademarks.total}项`);
+    if (companyFullInfo.copyrights?.total) ipStats.push(`软著${companyFullInfo.copyrights.total}项`);
+    if (ipStats.length > 0) {
+      basicInfoSummary += `- 知识产权：${ipStats.join('、')}
+`;
+    }
+
+    // 添加财务数据摘要
+    if (companyFullInfo.annualReports && companyFullInfo.annualReports.length > 0) {
+      const latestAR = companyFullInfo.annualReports[0];
+      const financeParts = [];
+      if (latestAR.TotalAssets) financeParts.push(`资产${latestAR.TotalAssets}`);
+      if (latestAR.TotalSales) financeParts.push(`营收${latestAR.TotalSales}`);
+      if (latestAR.NetProfit) financeParts.push(`净利润${latestAR.NetProfit}`);
+      if (financeParts.length > 0) {
+        basicInfoSummary += `- ${latestAR.Year}年财务：${financeParts.join('、')}
+`;
+      }
+    }
+  }
+
+  const systemPrompt = `你是一位企业分析专家，擅长将详细报告精类为简洁的执行摘要。
+
+**任务**：基于完整报告内容，生成一份约500字的缩略版报告，供领导快速查阅。
+
+**缩略版报告结构**（必须包含）：
+
+# 企业分析摘要：[企业名称]
+
+## 一、企业概况
+用2-3句话介绍企业基本信息和主营业务
+
+## 二、核心结论
+用表格形式展示关键指标：
+| 指标 | 评估 |
+|------|------|
+| 企业规模 | 大/中/小/微 |
+| 技术实力 | 强/中/弱 |
+| 财务状况 | 良好/一般/关注 |
+| 经营风险 | 低/中/高 |
+| 园区匹配度 | 高/中/低 |
+
+## 三、风险提示
+列出2-3个主要风险点（每条一句话）
+
+## 四、合作建议
+用2-3句话给出明确的合作建议或决策建议
+
+**要求**：
+- 总字数控制在400-600字
+- 语言精炼，直接给出结论
+- 使用Markdown格式
+- 不要包含过多细节，只保留核心信息`;
+
+  const userPrompt = `请基于以下完整报告内容，生成一份缩略版报告：
+
+**目标企业**：${companyName}
+${basicInfoSummary}
+**完整报告内容**：
+${fullReportContent.substring(0, 8000)}
+
+请生成缩略版报告。`;
+
+  try {
+    // 使用与完整版报告相同的LLM提供商
+    let response;
+    if (llmProvider && llmProvider !== 'qwen') {
+      await logReport('缩略版报告 - 使用外部LLM提供商', { provider: llmProvider });
+      response = await invokeLLMWithProvider(
+        {
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        },
+        llmProvider,
+        llmConfig
+      );
+    } else {
+      await logReport('缩略版报告 - 使用内置通义千问API');
+      response = await invokeLLM({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      });
+    }
+
+    const content = response.choices[0]?.message?.content;
+    return typeof content === 'string' ? content : "";
+  } catch (error) {
+    await logReport('缩略版报告 - LLM调用失败', { error: error instanceof Error ? error.message : 'Unknown error' });
+    return "";
+  }
+}
+
+async function generateParkAnalysis(companyName: string, parkCompanies: { id: number; companyName: string; industry: string | null; businessScope: string | null }[]) {
+  const parkCompanyList = parkCompanies.map(c => ({
+    name: c.companyName,
+    industry: c.industry,
+    scope: c.businessScope,
+  }));
+
+  const systemPrompt = `你是一位园区招商分析专家。请分析目标公司与园区的匹配情况，返回JSON格式的分析结果。`;
+
+  const userPrompt = `分析"${companyName}"与园区的匹配情况。
+
+园区现有企业：
+${JSON.stringify(parkCompanyList, null, 2)}
+
+请返回以下JSON格式的分析结果：
+{
+  "matchScore": 0-100的匹配度分数,
+  "matchReason": "匹配度分析说明",
+  "entryPossibility": "高/中/低",
+  "entryReason": "入驻可能性分析",
+  "upstreamCompanies": ["园区内匹配的上游企业名称"],
+  "downstreamCompanies": ["园区内匹配的下游企业名称"],
+  "expansionNeed": "高/中/低",
+  "expansionReason": "扩租需求分析",
+  "recommendations": ["招商建议1", "招商建议2"]
+}`;
+
+  try {
+    const response = await invokeLLM({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "park_analysis",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: {
+              matchScore: { type: "number", description: "匹配度分数0-100" },
+              matchReason: { type: "string", description: "匹配度分析说明" },
+              entryPossibility: { type: "string", description: "入驻可能性：高/中/低" },
+              entryReason: { type: "string", description: "入驻可能性分析" },
+              upstreamCompanies: { type: "array", items: { type: "string" }, description: "园区内上游企业" },
+              downstreamCompanies: { type: "array", items: { type: "string" }, description: "园区内下游企业" },
+              expansionNeed: { type: "string", description: "扩租需求：高/中/低" },
+              expansionReason: { type: "string", description: "扩租需求分析" },
+              recommendations: { type: "array", items: { type: "string" }, description: "招商建议" },
+            },
+            required: ["matchScore", "matchReason", "entryPossibility", "entryReason", "upstreamCompanies", "downstreamCompanies", "expansionNeed", "expansionReason", "recommendations"],
+            additionalProperties: false,
+          },
+        },
+      },
+    });
+
+    const content = response.choices[0]?.message?.content;
+    return (content && typeof content === 'string') ? JSON.parse(content) : null;
+  } catch (error) {
+    console.error("Park analysis error:", error);
+    return {
+      matchScore: 50,
+      matchReason: "分析过程中出现错误",
+      entryPossibility: "中",
+      entryReason: "需要进一步分析",
+      upstreamCompanies: [],
+      downstreamCompanies: [],
+      expansionNeed: "中",
+      expansionReason: "需要进一步分析",
+      recommendations: ["建议进一步了解该公司情况"],
+    };
+  }
+}
+
+// ============ 后台执行缓存预热 ============
+async function executeCacheWarmup(taskId: number, companyNames: string[]) {
+  try {
+    // 更新任务状态为处理中
+    await updateCacheWarmupTask(taskId, { status: 'processing' });
+
+    const successList: string[] = [];
+    const failedList: { name: string; error: string }[] = [];
+    let completedCount = 0;
+
+    for (const companyName of companyNames) {
+      // 检查任务是否被取消
+      const task = await getCacheWarmupTaskById(taskId);
+      if (!task || task.status === 'cancelled') {
+        console.log(`[CacheWarmup] Task ${taskId} cancelled, stopping`);
+        break;
+      }
+
+      try {
+        console.log(`[CacheWarmup] Warming up: ${companyName}`);
+
+        // 调用企查查API获取数据（会自动缓存）
+        await getCompanyFullInfo(companyName);
+
+        successList.push(companyName);
+        completedCount++;
+
+        // 更新进度
+        await updateCacheWarmupTask(taskId, {
+          completedCount,
+          successList: JSON.stringify(successList),
+        });
+
+        // 每个企业间隔500ms，避免请求过快
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : '未知错误';
+        failedList.push({ name: companyName, error: errorMsg });
+        console.error(`[CacheWarmup] Failed: ${companyName}`, errorMsg);
+
+        await updateCacheWarmupTask(taskId, {
+          failedCount: failedList.length,
+          failedList: JSON.stringify(failedList),
+        });
+      }
+    }
+
+    // 计算预估节省费用（每次完整查询约4.35元）
+    const estimatedSavings = (successList.length * 4.35).toFixed(2);
+
+    // 更新任务完成状态
+    await updateCacheWarmupTask(taskId, {
+      status: failedList.length === companyNames.length ? 'failed' : 'completed',
+      completedCount: successList.length,
+      failedCount: failedList.length,
+      successList: JSON.stringify(successList),
+      failedList: JSON.stringify(failedList),
+      estimatedSavings,
+      completedAt: new Date(),
+    });
+
+    console.log(`[CacheWarmup] Task ${taskId} completed: ${successList.length} success, ${failedList.length} failed`);
+  } catch (error) {
+    console.error(`[CacheWarmup] Task ${taskId} error:`, error);
+    await updateCacheWarmupTask(taskId, {
+      status: 'failed',
+      errorMessage: error instanceof Error ? error.message : '预热任务失败',
+    });
+  }
+}
+
+export type AppRouter = typeof appRouter;

@@ -1,0 +1,1 @@
+ALTER TABLE `park_companies` MODIFY COLUMN `contactPhone` varchar(1024);

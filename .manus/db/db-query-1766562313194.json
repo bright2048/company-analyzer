@@ -1,0 +1,30 @@
+{
+  "query": "SHOW CREATE TABLE company_reports;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user sFX9FWkZmjLK5dz.ccfa7874b59b --database YxyVMjsSDzf8h3qborrsTJ --execute SHOW CREATE TABLE company_reports;",
+  "rows": [
+    {
+      "Table": "company_reports",
+      "Create Table": "CREATE TABLE `company_reports` ("
+    }
+  ],
+  "messages": [
+    "  `id` int(11) NOT NULL AUTO_INCREMENT,",
+    "  `companyName` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,",
+    "  `companyInfo` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,",
+    "  `reportContent` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,",
+    "  `parkAnalysis` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,",
+    "  `status` enum('pending','searching','generating','completed','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',",
+    "  `errorMessage` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,",
+    "  `dataSource` enum('web','tianyancha','qichacha') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'web',",
+    "  `wordFileUrl` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,",
+    "  `pdfFileUrl` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,",
+    "  `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+    "  `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,",
+    "  `batchTaskId` int(11) DEFAULT NULL,",
+    "  PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */",
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=90001"
+  ],
+  "stdout": "Table\tCreate Table\ncompany_reports\tCREATE TABLE `company_reports` (\n  `id` int(11) NOT NULL AUTO_INCREMENT,\n  `companyName` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `companyInfo` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `reportContent` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `parkAnalysis` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `status` enum('pending','searching','generating','completed','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',\n  `errorMessage` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `dataSource` enum('web','tianyancha','qichacha') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'web',\n  `wordFileUrl` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `pdfFileUrl` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  `batchTaskId` int(11) DEFAULT NULL,\n  PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci AUTO_INCREMENT=90001\n",
+  "stderr": "",
+  "execution_time_ms": 1475
+}
