@@ -1,6 +1,18 @@
 {
   "include": ["client/src/**/*", "shared/**/*", "server/**/*"],
-  "exclude": ["node_modules", "build", "dist", "**/*.test.ts"],
+  "exclude": [
+    "node_modules",
+    "build",
+    "dist",
+    "**/*.test.ts",
+    "server/qcc_clientinfo_fix.ts",
+    "server/qcc_supplier_apifix.ts",
+    "server/qcc_trademark-fix.ts",
+    "server/router-trademark.ts",
+    "server/temp_copyrightapi.ts",
+    "server/zizhizhengshu_fix.ts",
+    "client/src/components/summaryreport_fix.ts"
+  ],
   "compilerOptions": {
     "incremental": true,
     "tsBuildInfoFile": "./node_modules/typescript/tsbuildinfo",
