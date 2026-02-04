@@ -1,4 +1,4 @@
-# 鲲灵智谱 增量更新指南
+# 数智深圳湾智能体 增量更新指南
 
 **更新内容**：企业名称自动联想功能 + LLM提示词优化  
 **更新日期**：2024年12月
@@ -9,10 +9,10 @@
 
 本次更新涉及 **2个文件**，无需修改数据库结构：
 
-| 文件路径 | 操作 | 说明 |
-|---------|------|------|
-| `server/routers.ts` | 修改 | 新增企业搜索建议接口 + 优化LLM提示词 |
-| `client/src/pages/Home.tsx` | 修改 | 添加自动联想UI组件 |
+| 文件路径                    | 操作 | 说明                                 |
+| --------------------------- | ---- | ------------------------------------ |
+| `server/routers.ts`         | 修改 | 新增企业搜索建议接口 + 优化LLM提示词 |
+| `client/src/pages/Home.tsx` | 修改 | 添加自动联想UI组件                   |
 
 ---
 
@@ -31,7 +31,7 @@
       .query(async ({ input }) => {
         const { keyword } = input;
         const suggestions: { name: string; source: string }[] = [];
-        
+
         // 1. 从园区企业库中搜索
         const parkCompaniesData = await getAllParkCompanyNames();
         const matchedParkCompanies = parkCompaniesData
@@ -39,7 +39,7 @@
           .slice(0, 5)
           .map(c => ({ name: c.companyName, source: "园区企业" }));
         suggestions.push(...matchedParkCompanies);
-        
+
         // 2. 从历史报告中搜索
         const reports = await getCompanyReports(100, 0);
         const matchedReports = reports
@@ -48,7 +48,7 @@
           .slice(0, 5)
           .map(r => ({ name: r.companyName, source: "历史查询" }));
         suggestions.push(...matchedReports);
-        
+
         // 3. 添加常见企业名称后缀建议
         const commonSuffixes = ["有限公司", "科技有限公司", "集团有限公司", "实业有限公司", "股份有限公司"];
         if (keyword.length >= 2 && !keyword.includes("有限") && !keyword.includes("公司")) {
@@ -58,7 +58,7 @@
             .filter(s => !suggestions.some(existing => existing.name === s.name));
           suggestions.push(...suffixSuggestions);
         }
-        
+
         return suggestions.slice(0, 10);
       }),
   }),
@@ -67,6 +67,7 @@
 **位置**：修改 `generateCompanyReport` 函数中的 `systemPrompt` 和 `userPrompt`
 
 **旧的 systemPrompt**（需要替换）：
+
 ```typescript
 const systemPrompt = `你是一位专业的企业分析师，擅长撰写高质量的公司调研报告。
 
@@ -77,6 +78,7 @@ const systemPrompt = `你是一位专业的企业分析师，擅长撰写高质�
 ```
 
 **新的 systemPrompt**（替换为）：
+
 ```typescript
 const systemPrompt = `你是一位专业的企业分析师，擅长撰写高质量的公司调研报告。
 
@@ -116,6 +118,7 @@ const systemPrompt = `你是一位专业的企业分析师，擅长撰写高质�
 ```
 
 **旧的 userPrompt**（需要替换）：
+
 ```typescript
 const userPrompt = `请为以下公司生成一份详细的企业分析报告：
 ...
@@ -123,6 +126,7 @@ const userPrompt = `请为以下公司生成一份详细的企业分析报告：
 ```
 
 **新的 userPrompt**（替换为）：
+
 ```typescript
 const userPrompt = `请为以下公司生成一份详细的企业分析报告：
 
@@ -139,11 +143,13 @@ ${parkCompanyList || "暂无园区企业数据"}
 **位置**：修改 NOT_FOUND 检测逻辑
 
 **旧代码**：
+
 ```typescript
 if (contentStr.includes("[NOT_FOUND]") || contentStr.trim().startsWith("未找到")) {
 ```
 
 **新代码**：
+
 ```typescript
 if (contentStr.includes("[NOT_FOUND]")) {
 ```
@@ -153,6 +159,7 @@ if (contentStr.includes("[NOT_FOUND]")) {
 ### 2. client/src/pages/Home.tsx
 
 **完整替换**整个文件，新版本包含：
+
 - 自动联想下拉列表组件
 - 搜索建议API调用
 - 点击外部关闭建议列表的逻辑

@@ -1,15 +1,32 @@
 import { useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { 
-  Upload, FileText, Building2, Settings, History, Loader2, 
-  ArrowLeft, Download, CheckCircle2, XCircle, Clock, Layers,
-  RefreshCw, AlertCircle
+import {
+  Upload,
+  FileText,
+  Building2,
+  Settings,
+  History,
+  Loader2,
+  ArrowLeft,
+  Download,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Layers,
+  RefreshCw,
+  AlertCircle,
 } from "lucide-react";
 
 export default function BatchQuery() {
@@ -26,7 +43,7 @@ export default function BatchQuery() {
 
   // 创建批量任务
   const createBatchMutation = trpc.batchTask.create.useMutation({
-    onSuccess: (data) => {
+    onSuccess: data => {
       toast.success(data.message);
       setSelectedFile(null);
       if (fileInputRef.current) {
@@ -34,18 +51,18 @@ export default function BatchQuery() {
       }
       refetchTasks();
     },
-    onError: (error) => {
+    onError: error => {
       toast.error("创建批量任务失败: " + error.message);
     },
   });
 
   // 下载批量报告
   const downloadMutation = trpc.batchTask.downloadAll.useMutation({
-    onSuccess: (data) => {
+    onSuccess: data => {
       window.open(data.url, "_blank");
       toast.success("报告已准备好，正在下载...");
     },
-    onError: (error) => {
+    onError: error => {
       toast.error("下载失败: " + error.message);
     },
   });
@@ -70,7 +87,7 @@ export default function BatchQuery() {
     setIsUploading(true);
     try {
       const reader = new FileReader();
-      reader.onload = async (e) => {
+      reader.onload = async e => {
         const content = e.target?.result as string;
         const base64 = btoa(unescape(encodeURIComponent(content)));
         createBatchMutation.mutate({
@@ -93,13 +110,33 @@ export default function BatchQuery() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "pending":
-        return <Badge variant="secondary"><Clock className="h-3 w-3 mr-1" />等待中</Badge>;
+        return (
+          <Badge variant="secondary">
+            <Clock className="h-3 w-3 mr-1" />
+            等待中
+          </Badge>
+        );
       case "processing":
-        return <Badge variant="default" className="bg-blue-500"><Loader2 className="h-3 w-3 mr-1 animate-spin" />处理中</Badge>;
+        return (
+          <Badge variant="default" className="bg-blue-500">
+            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+            处理中
+          </Badge>
+        );
       case "completed":
-        return <Badge variant="default" className="bg-green-500"><CheckCircle2 className="h-3 w-3 mr-1" />已完成</Badge>;
+        return (
+          <Badge variant="default" className="bg-green-500">
+            <CheckCircle2 className="h-3 w-3 mr-1" />
+            已完成
+          </Badge>
+        );
       case "failed":
-        return <Badge variant="destructive"><XCircle className="h-3 w-3 mr-1" />失败</Badge>;
+        return (
+          <Badge variant="destructive">
+            <XCircle className="h-3 w-3 mr-1" />
+            失败
+          </Badge>
+        );
       default:
         return <Badge variant="secondary">{status}</Badge>;
     }
@@ -111,7 +148,11 @@ export default function BatchQuery() {
       <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
         <div className="container flex h-16 items-center justify-between">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={() => setLocation("/")}>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setLocation("/")}
+            >
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <div className="flex items-center gap-2">
@@ -119,25 +160,45 @@ export default function BatchQuery() {
                 <Layers className="h-5 w-5 text-white" />
               </div>
               <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground leading-none">鲲鹏产业源头创新中心</span>
-                <span className="font-semibold text-lg leading-tight">鲲灵智谱</span>
+                <span className="text-xs text-muted-foreground leading-none">
+                  鲲鹏产业源头创新中心
+                </span>
+                <span className="font-semibold text-lg leading-tight">
+                  鲲灵智谱
+                </span>
               </div>
             </div>
           </div>
           <nav className="flex items-center gap-4">
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/tasks")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setLocation("/tasks")}
+            >
               <FileText className="h-4 w-4 mr-2" />
               任务管理
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/reports")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setLocation("/reports")}
+            >
               <History className="h-4 w-4 mr-2" />
               历史报告
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/park")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setLocation("/park")}
+            >
               <Building2 className="h-4 w-4 mr-2" />
               园区企业
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/settings")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setLocation("/settings")}
+            >
               <Settings className="h-4 w-4 mr-2" />
               设置
             </Button>
@@ -167,7 +228,7 @@ export default function BatchQuery() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div 
+              <div
                 className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
                 onClick={() => fileInputRef.current?.click()}
               >
@@ -177,17 +238,22 @@ export default function BatchQuery() {
                   accept=".csv"
                   onChange={handleFileSelect}
                   className="hidden"
+                  aria-label="选择CSV文件上传"
                 />
                 <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                 {selectedFile ? (
                   <div>
                     <p className="font-medium">{selectedFile.name}</p>
-                    <p className="text-sm text-muted-foreground">点击重新选择文件</p>
+                    <p className="text-sm text-muted-foreground">
+                      点击重新选择文件
+                    </p>
                   </div>
                 ) : (
                   <div>
                     <p className="font-medium">点击选择CSV文件</p>
-                    <p className="text-sm text-muted-foreground">或将文件拖拽到此处</p>
+                    <p className="text-sm text-muted-foreground">
+                      或将文件拖拽到此处
+                    </p>
                   </div>
                 )}
               </div>
@@ -196,15 +262,22 @@ export default function BatchQuery() {
                 <div className="text-sm text-muted-foreground">
                   <p>CSV文件示例：</p>
                   <code className="bg-muted px-2 py-1 rounded text-xs">
-                    企业名称<br/>
-                    华为技术有限公司<br/>
-                    腾讯科技（深圳）有限公司<br/>
+                    企业名称
+                    <br />
+                    华为技术有限公司
+                    <br />
+                    腾讯科技（深圳）有限公司
+                    <br />
                     阿里巴巴集团控股有限公司
                   </code>
                 </div>
-                <Button 
-                  onClick={handleUpload} 
-                  disabled={!selectedFile || isUploading || createBatchMutation.isPending}
+                <Button
+                  onClick={handleUpload}
+                  disabled={
+                    !selectedFile ||
+                    isUploading ||
+                    createBatchMutation.isPending
+                  }
                 >
                   {isUploading || createBatchMutation.isPending ? (
                     <>
@@ -228,7 +301,9 @@ export default function BatchQuery() {
                   <ul className="list-disc list-inside mt-1 space-y-1">
                     <li>每次最多支持50个企业</li>
                     <li>报告将在后台自动生成，无需等待</li>
-                    <li>如果企业信息无法确认，系统会标记为失败，不会胡编乱造</li>
+                    <li>
+                      如果企业信息无法确认，系统会标记为失败，不会胡编乱造
+                    </li>
                     <li>生成完成后可打包下载所有报告</li>
                   </ul>
                 </div>
@@ -248,7 +323,11 @@ export default function BatchQuery() {
                   查看所有批量查询任务的进度和结果
                 </CardDescription>
               </div>
-              <Button variant="outline" size="sm" onClick={() => refetchTasks()}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetchTasks()}
+              >
                 <RefreshCw className="h-4 w-4 mr-2" />
                 刷新
               </Button>
@@ -262,7 +341,7 @@ export default function BatchQuery() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {tasks.map((task) => (
+                  {tasks.map(task => (
                     <div key={task.id} className="border rounded-lg p-4">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
@@ -270,19 +349,29 @@ export default function BatchQuery() {
                           {getStatusBadge(task.status)}
                         </div>
                         <span className="text-sm text-muted-foreground">
-                          {new Date(new Date(task.createdAt).getTime() - 8 * 60 * 60 * 1000).toLocaleString("zh-CN")}
+                          {new Date(
+                            new Date(task.createdAt).getTime() -
+                              8 * 60 * 60 * 1000
+                          ).toLocaleString("zh-CN")}
                         </span>
                       </div>
 
                       <div className="space-y-2">
                         <div className="flex items-center justify-between text-sm">
-                          <span>进度：{task.completedCount + task.failedCount} / {task.totalCount}</span>
+                          <span>
+                            进度：{task.completedCount + task.failedCount} /{" "}
+                            {task.totalCount}
+                          </span>
                           <span className="text-muted-foreground">
                             成功 {task.completedCount} | 失败 {task.failedCount}
                           </span>
                         </div>
-                        <Progress 
-                          value={((task.completedCount + task.failedCount) / task.totalCount) * 100} 
+                        <Progress
+                          value={
+                            ((task.completedCount + task.failedCount) /
+                              task.totalCount) *
+                            100
+                          }
                           className="h-2"
                         />
                       </div>
@@ -293,9 +382,11 @@ export default function BatchQuery() {
                             <CheckCircle2 className="h-4 w-4 inline mr-1" />
                             任务已完成
                           </span>
-                          <Button 
-                            size="sm" 
-                            onClick={() => downloadMutation.mutate({ id: task.id })}
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              downloadMutation.mutate({ id: task.id })
+                            }
                             disabled={downloadMutation.isPending}
                           >
                             {downloadMutation.isPending ? (

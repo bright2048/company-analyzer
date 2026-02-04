@@ -1,4 +1,4 @@
-# 鲲灵智谱（KunLing CIS）部署方案
+# 数智深圳湾智能体（KunLing CIS）部署方案
 
 **版本**: 5.1  
 **更新日期**: 2025年1月9日  
@@ -23,17 +23,17 @@
 
 ## 1. 系统概述
 
-鲲灵智谱（KunLing CIS）是一个企业智能分析平台，基于 AI 大模型技术，为用户提供企业调研报告的智能生成服务。系统支持单个企业查询和批量查询（CSV导入），报告生成采用后台任务模式，避免用户长时间等待。
+数智深圳湾智能体（KunLing CIS）是一个企业智能分析平台，基于 AI 大模型技术，为用户提供企业调研报告的智能生成服务。系统支持单个企业查询和批量查询（CSV导入），报告生成采用后台任务模式，避免用户长时间等待。
 
 ### 1.1 核心功能
 
-| 功能模块 | 描述 |
-|---------|------|
-| 单企业查询 | 输入企业名称，AI 自动搜索并生成分析报告 |
-| 批量查询 | 上传 CSV 文件，后台异步生成多个企业报告（最多50个） |
-| 任务管理 | 查看批量任务进度、历史记录，支持删除和打包下载 |
-| 园区企业管理 | 管理园区入驻企业信息，支持批量导入 |
-| 报告导出 | 支持 Word/PDF 格式导出 |
+| 功能模块     | 描述                                                |
+| ------------ | --------------------------------------------------- |
+| 单企业查询   | 输入企业名称，AI 自动搜索并生成分析报告             |
+| 批量查询     | 上传 CSV 文件，后台异步生成多个企业报告（最多50个） |
+| 任务管理     | 查看批量任务进度、历史记录，支持删除和打包下载      |
+| 园区企业管理 | 管理园区入驻企业信息，支持批量导入                  |
+| 报告导出     | 支持 Word/PDF 格式导出                              |
 
 ### 1.2 技术栈
 
@@ -82,23 +82,23 @@
 
 ### 3.1 服务器配置
 
-| 配置项 | 最低要求 | 推荐配置 |
-|-------|---------|---------|
-| CPU | 2 核 | 4 核及以上 |
-| 内存 | 4 GB | 8 GB 及以上 |
-| 磁盘 | 40 GB SSD | 100 GB SSD |
-| 带宽 | 5 Mbps | 10 Mbps 及以上 |
+| 配置项   | 最低要求                  | 推荐配置         |
+| -------- | ------------------------- | ---------------- |
+| CPU      | 2 核                      | 4 核及以上       |
+| 内存     | 4 GB                      | 8 GB 及以上      |
+| 磁盘     | 40 GB SSD                 | 100 GB SSD       |
+| 带宽     | 5 Mbps                    | 10 Mbps 及以上   |
 | 操作系统 | Ubuntu 20.04+ / CentOS 7+ | Ubuntu 22.04 LTS |
 
 ### 3.2 软件依赖
 
-| 软件 | 版本要求 | 用途 |
-|-----|---------|------|
-| Node.js | 18.x 或 22.x | 运行时环境 |
-| pnpm | 8.x+ | 包管理器 |
-| MySQL | 8.0+ | 数据库（或 TiDB） |
-| Nginx | 1.18+ | 反向代理（可选） |
-| PM2 | 5.x+ | 进程管理（生产环境） |
+| 软件    | 版本要求     | 用途                 |
+| ------- | ------------ | -------------------- |
+| Node.js | 18.x 或 22.x | 运行时环境           |
+| pnpm    | 8.x+         | 包管理器             |
+| MySQL   | 8.0+         | 数据库（或 TiDB）    |
+| Nginx   | 1.18+        | 反向代理（可选）     |
+| PM2     | 5.x+         | 进程管理（生产环境） |
 
 ---
 
@@ -110,7 +110,7 @@ Manus 平台提供一键部署功能，是最简单的部署方式。
 
 1. **创建检查点**: 在开发完成后，使用 Manus 工具保存检查点
 2. **点击发布**: 在 Manus 管理界面点击 "Publish" 按钮
-3. **配置域名**: 
+3. **配置域名**:
    - 使用自动分配的 `xxx.manus.space` 域名
    - 或绑定自定义域名（在 Settings → Domains 中配置）
 4. **配置环境变量**: 在 Settings → Secrets 中配置必要的环境变量
@@ -257,7 +257,7 @@ NODE_ENV=production node dist/server/_core/index.js
 server {
     listen 80;
     server_name your-domain.com;
-    
+
     # 强制 HTTPS 跳转
     return 301 https://$server_name$request_uri;
 }
@@ -265,26 +265,26 @@ server {
 server {
     listen 443 ssl http2;
     server_name your-domain.com;
-    
+
     # SSL 证书配置
     ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
-    
+
     # SSL 安全配置
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
     ssl_prefer_server_ciphers off;
-    
+
     # 请求体大小限制（支持文件上传）
     client_max_body_size 50M;
-    
+
     # 静态资源缓存
     location /assets/ {
         proxy_pass http://127.0.0.1:3000;
         proxy_cache_valid 200 30d;
         add_header Cache-Control "public, immutable";
     }
-    
+
     # API 和其他请求
     location / {
         proxy_pass http://127.0.0.1:3000;
@@ -296,7 +296,7 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_cache_bypass $http_upgrade;
-        
+
         # 超时配置（报告生成可能需要较长时间）
         proxy_connect_timeout 60s;
         proxy_send_timeout 120s;
@@ -356,13 +356,13 @@ mysql://username:password@host:port/database?ssl=true
 
 系统使用 Drizzle ORM 管理数据库 Schema，主要表结构如下：
 
-| 表名 | 用途 |
-|-----|------|
-| `users` | 用户信息 |
-| `park_companies` | 园区企业信息 |
-| `company_reports` | 企业分析报告 |
-| `batch_tasks` | 批量任务记录 |
-| `data_source_config` | 数据源配置 |
+| 表名                 | 用途         |
+| -------------------- | ------------ |
+| `users`              | 用户信息     |
+| `park_companies`     | 园区企业信息 |
+| `company_reports`    | 企业分析报告 |
+| `batch_tasks`        | 批量任务记录 |
+| `data_source_config` | 数据源配置   |
 
 运行 `pnpm db:push` 会自动创建所有表结构。
 
@@ -372,31 +372,31 @@ mysql://username:password@host:port/database?ssl=true
 
 ### 7.1 必需环境变量
 
-| 变量名 | 描述 | 示例 |
-|-------|------|------|
-| `DATABASE_URL` | 数据库连接字符串 | `mysql://user:pass@host:3306/db` |
-| `JWT_SECRET` | JWT 签名密钥（至少32字符） | `your-random-secret-key...` |
-| `BUILT_IN_FORGE_API_KEY` | Manus Forge API 密钥 | `sk-xxx` |
-| `BUILT_IN_FORGE_API_URL` | Manus Forge API 地址 | `https://forge.manus.im` |
+| 变量名                   | 描述                       | 示例                             |
+| ------------------------ | -------------------------- | -------------------------------- |
+| `DATABASE_URL`           | 数据库连接字符串           | `mysql://user:pass@host:3306/db` |
+| `JWT_SECRET`             | JWT 签名密钥（至少32字符） | `your-random-secret-key...`      |
+| `BUILT_IN_FORGE_API_KEY` | Manus Forge API 密钥       | `sk-xxx`                         |
+| `BUILT_IN_FORGE_API_URL` | Manus Forge API 地址       | `https://forge.manus.im`         |
 
 ### 7.2 可选环境变量
 
-| 变量名 | 描述 | 默认值 |
-|-------|------|-------|
-| `PORT` | 服务端口 | `3000` |
-| `NODE_ENV` | 运行环境 | `development` |
-| `VITE_APP_TITLE` | 应用标题 | `鲲灵智谱` |
-| `VITE_APP_LOGO` | 应用 Logo URL | - |
+| 变量名           | 描述          | 默认值             |
+| ---------------- | ------------- | ------------------ |
+| `PORT`           | 服务端口      | `3000`             |
+| `NODE_ENV`       | 运行环境      | `development`      |
+| `VITE_APP_TITLE` | 应用标题      | `数智深圳湾智能体` |
+| `VITE_APP_LOGO`  | 应用 Logo URL | -                  |
 
 ### 7.3 S3 存储配置（自托管需要）
 
-| 变量名 | 描述 |
-|-------|------|
-| `S3_ENDPOINT` | S3 端点地址 |
-| `S3_BUCKET` | 存储桶名称 |
-| `S3_ACCESS_KEY` | 访问密钥 |
-| `S3_SECRET_KEY` | 密钥 |
-| `S3_REGION` | 区域 |
+| 变量名          | 描述        |
+| --------------- | ----------- |
+| `S3_ENDPOINT`   | S3 端点地址 |
+| `S3_BUCKET`     | 存储桶名称  |
+| `S3_ACCESS_KEY` | 访问密钥    |
+| `S3_SECRET_KEY` | 密钥        |
+| `S3_REGION`     | 区域        |
 
 ---
 
@@ -524,6 +524,7 @@ pm2 show kunling-cis
 **问题**: 服务启动失败，报错 "Cannot find module"
 
 **解决方案**:
+
 ```bash
 # 重新安装依赖
 rm -rf node_modules
@@ -538,6 +539,7 @@ pnpm build
 **问题**: 报错 "ECONNREFUSED" 或 "Access denied"
 
 **解决方案**:
+
 1. 检查 `DATABASE_URL` 格式是否正确
 2. 确认数据库服务正在运行
 3. 检查用户名密码是否正确
@@ -548,6 +550,7 @@ pnpm build
 **问题**: 生成报告时页面超时
 
 **解决方案**:
+
 1. 检查 AI 服务 API 密钥是否有效
 2. 增加 Nginx 超时配置
 3. 确认网络连接正常
@@ -557,6 +560,7 @@ pnpm build
 **问题**: CSV 文件上传失败
 
 **解决方案**:
+
 1. 检查 Nginx `client_max_body_size` 配置
 2. 确认 S3 存储配置正确
 3. 检查文件格式是否为 UTF-8 编码
@@ -566,6 +570,7 @@ pnpm build
 **问题**: 服务频繁重启，日志显示 OOM
 
 **解决方案**:
+
 ```bash
 # 增加 Node.js 内存限制
 NODE_OPTIONS="--max-old-space-size=4096" pm2 start ecosystem.config.js
