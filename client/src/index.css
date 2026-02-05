@@ -175,3 +175,56 @@
     }
   }
 }
+
+@layer utilities {
+  /* 脉冲动画 - 慢速 */
+  @keyframes pulse-slow {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.8; }
+  }
+  .animate-pulse-slow {
+    animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  /* 流动动画 - 用于连接线 */
+  @keyframes flow {
+    0% { transform: translateY(-100%); }
+    100% { transform: translateY(100%); }
+  }
+  .animate-flow {
+    animation: flow 2s linear infinite;
+  }
+
+  /* 渐入动画 */
+  @keyframes fade-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-fade-in-up {
+    animation: fade-in-up 0.5s ease-out;
+  }
+
+  /* 缩放弹跳 */
+  @keyframes scale-bounce {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+  }
+  .animate-scale-bounce {
+    animation: scale-bounce 0.5s ease-in-out;
+  }
+
+  /* 雷达图脉冲动画 */
+  @keyframes radar-pulse {
+    0%, 100% { opacity: 0.8; }
+    50% { opacity: 1; }
+  }
+  .animate-radar-pulse {
+    animation: radar-pulse 2s ease-in-out infinite;
+  }
+}

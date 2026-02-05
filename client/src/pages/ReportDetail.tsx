@@ -116,7 +116,7 @@ function RiskAnalysisSection({ reportContent }: { reportContent: string }) {
       </div>
 
       {/* 风险警示 */}
-      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-6">
+      <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4 mt-6 shadow-md">
         <div className="flex items-start gap-3">
           <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
           <div>
@@ -297,7 +297,7 @@ export default function ReportDetail() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur sticky top-0 z-50">
+      <header className="border-b bg-background/80 backdrop-blur-xl sticky top-0 z-50 shadow-lg">
         <div className="container flex h-16 items-center justify-between">
           <div className="flex items-center gap-4">
             <Button
@@ -419,10 +419,11 @@ export default function ReportDetail() {
         {(report.status === "pending" ||
           report.status === "searching" ||
           report.status === "generating") && (
-          <Card className="max-w-xl mx-auto">
+          <Card className="max-w-xl mx-auto bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950/20 dark:to-purple-950/20 border-blue-200 dark:border-blue-800">
             <CardHeader className="text-center">
-              <div className="mx-auto mb-4">
-                <Loader2 className="h-12 w-12 animate-spin text-primary" />
+              <div className="mx-auto mb-4 relative">
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-500 opacity-20 animate-pulse rounded-full blur-xl" />
+                <Loader2 className="h-12 w-12 animate-spin text-primary relative z-10" />
               </div>
               <CardTitle>正在生成报告</CardTitle>
               <CardDescription>
@@ -462,7 +463,7 @@ export default function ReportDetail() {
             </CardHeader>
             <CardContent className="space-y-4">
               {report.errorMessage?.includes("未找到") && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-left">
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4 text-left shadow-md">
                   <div className="flex items-start gap-3">
                     <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
                     <div className="text-sm text-amber-800">
@@ -495,15 +496,15 @@ export default function ReportDetail() {
         {report.status === "completed" && report.reportContent && (
           <Tabs defaultValue="summary" className="space-y-6">
             <TabsList className="grid w-full max-w-3xl mx-auto grid-cols-5">
-              <TabsTrigger value="summary">
+              <TabsTrigger value="summary" className="transition-all duration-300 hover:scale-105">
                 <FileCheck className="h-4 w-4 mr-2" />
                 缩略版
               </TabsTrigger>
-              <TabsTrigger value="report">
+              <TabsTrigger value="report" className="transition-all duration-300 hover:scale-105">
                 <FileText className="h-4 w-4 mr-2" />
                 完整版
               </TabsTrigger>
-              <TabsTrigger value="equity">
+              <TabsTrigger value="equity" className="transition-all duration-300 hover:scale-105">
                 <GitBranch className="h-4 w-4 mr-2" />
                 企业族谱
               </TabsTrigger>
@@ -511,7 +512,7 @@ export default function ReportDetail() {
                 <AlertTriangle className="h-4 w-4 mr-2" />
                 风险扫描
               </TabsTrigger> */}
-              <TabsTrigger value="park">
+              <TabsTrigger value="park" className="transition-all duration-300 hover:scale-105">
                 <Building2 className="h-4 w-4 mr-2" />
                 园区匹配
               </TabsTrigger>
