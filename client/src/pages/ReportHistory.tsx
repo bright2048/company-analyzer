@@ -6,7 +6,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import {
-  ArrowLeft,
   FileText,
   Loader2,
   Trash2,
@@ -14,6 +13,7 @@ import {
   Download,
   Clock,
 } from "lucide-react";
+import { PageLayout } from "@/components/PageLayout";
 
 export default function ReportHistory() {
   const [, setLocation] = useLocation();
@@ -116,27 +116,7 @@ export default function ReportHistory() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur sticky top-0 z-50">
-        <div className="container flex h-16 items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => setLocation("/")}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-            <div>
-              <h1 className="font-semibold flex items-center gap-2">
-                <FileText className="h-5 w-5" />
-                历史报告
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                共 {reports?.length || 0} 份报告
-              </p>
-            </div>
-          </div>
-        </div>
-      </header>
-
+    <PageLayout>
       <main className="container py-8">
         <Card>
           <CardContent className="p-0">
@@ -228,6 +208,6 @@ export default function ReportHistory() {
           </CardContent>
         </Card>
       </main>
-    </div>
+    </PageLayout>
   );
 }

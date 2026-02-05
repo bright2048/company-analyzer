@@ -10,6 +10,7 @@ import {
   User,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import LogoPng from "@/assets/images/logo.png";
 
 export function GlobalNavigation() {
   const [location, setLocation] = useLocation();
@@ -62,12 +63,9 @@ export function GlobalNavigation() {
             className="flex items-center gap-3 hover:opacity-80 transition-opacity"
           >
             <img
-              src="/logo.png"
+              src={LogoPng}
               alt="Logo"
-              className="h-10 w-10 rounded-lg"
-              onError={(e) => {
-                e.currentTarget.style.display = "none";
-              }}
+              className="h-10 w-10 rounded-lg object-contain"
             />
             <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
               鲲鹏产业源头创新中心
