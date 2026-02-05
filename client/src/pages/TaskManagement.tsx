@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
+import { PageLayout } from "@/components/PageLayout";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -30,16 +31,11 @@ import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import {
   FileText,
-  Building2,
-  Settings,
-  History,
   Loader2,
-  ArrowLeft,
   Download,
   CheckCircle2,
   XCircle,
   Clock,
-  Layers,
   RefreshCw,
   AlertCircle,
   Upload,
@@ -263,71 +259,10 @@ export default function TaskManagement() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-      {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-        <div className="container flex h-16 items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setLocation("/")}
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-600 to-cyan-500 flex items-center justify-center">
-                <Layers className="h-5 w-5 text-white" />
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground leading-none">
-                  鲲鹏产业源头创新中心
-                </span>
-                <span className="font-semibold text-lg leading-tight">
-                  数智深圳湾智能体
-                </span>
-              </div>
-            </div>
-          </div>
-          <nav className="flex items-center gap-4">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/batch")}
-            >
-              <Upload className="h-4 w-4 mr-2" />
-              批量查询
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/reports")}
-            >
-              <History className="h-4 w-4 mr-2" />
-              历史报告
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/park")}
-            >
-              <Building2 className="h-4 w-4 mr-2" />
-              园区企业
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/settings")}
-            >
-              <Settings className="h-4 w-4 mr-2" />
-              设置
-            </Button>
-          </nav>
-        </div>
-      </header>
-
-      <main className="container py-8">
-        <div className="space-y-8">
+    <PageLayout>
+      <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
+        <main className="container py-8">
+          <div className="space-y-8">
           {/* Page Title */}
           <div className="flex items-center justify-between">
             <div>
@@ -545,6 +480,7 @@ export default function TaskManagement() {
           </Card>
         </div>
       </main>
+      </div>
 
       {/* Task Detail Dialog */}
       <Dialog open={detailDialogOpen} onOpenChange={setDetailDialogOpen}>
@@ -727,6 +663,6 @@ export default function TaskManagement() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageLayout>
   );
 }

@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
+import { PageLayout } from "@/components/PageLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
 import {
   Table,
   TableBody,
@@ -20,11 +22,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/contexts/AuthContext";
 import { 
-  ArrowLeft, Building2, Settings, History, 
   BarChart3, TrendingUp, DollarSign, Activity,
   RefreshCw, Calendar, Clock, CheckCircle2, XCircle,
-  Upload, ListTodo, Layers, Search, Bot, HardDrive, Zap
+  Search, Bot, HardDrive, Zap
 } from "lucide-react";
 
 interface ApiCallRecord {
@@ -43,27 +45,45 @@ interface ApiCallRecord {
 
 export default function ApiStats() {
   const [, setLocation] = useLocation();
+  const { user, isLoading } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
 
+  useEffect(() => {
+    if (isLoading) return;
+    if (user && user.role !== "admin") {
+      toast.error("仅管理员可访问此页面");
+      setLocation("/");
+    }
+  }, [isLoading, setLocation, user]);
+
   // 获取今日统计
-  const { data: todayStats, refetch: refetchToday, isLoading: loadingToday } = trpc.apiStats.today.useQuery();
+  const { data: todayStats, refetch: refetchToday, isLoading: loadingToday } = trpc.apiStats.today.useQuery(undefined, {
+    enabled: isAdmin,
+  });
   
   // 获取月度统计
   const { data: monthlyStats, refetch: refetchMonthly, isLoading: loadingMonthly } = trpc.apiStats.monthly.useQuery(
-    { year: selectedYear, month: selectedMonth }
+    { year: selectedYear, month: selectedMonth },
+    { enabled: isAdmin }
   );
   
   // 获取最近调用记录
   const { data: recentCalls, refetch: refetchRecent, isLoading: loadingRecent } = trpc.apiStats.recent.useQuery(
-    { limit: 100 }
+    { limit: 100 },
+    { enabled: isAdmin }
   );
   
   // 获取统计汇总
-  const { data: summary, refetch: refetchSummary } = trpc.apiStats.summary.useQuery();
+  const { data: summary, refetch: refetchSummary } = trpc.apiStats.summary.useQuery(undefined, {
+    enabled: isAdmin,
+  });
   
   // 获取缓存统计
-  const { data: cacheStats, refetch: refetchCache } = trpc.qichachaCache.stats.useQuery();
+  const { data: cacheStats, refetch: refetchCache } = trpc.qichachaCache.stats.useQuery(undefined, {
+    enabled: isAdmin,
+  });
 
   const handleRefresh = () => {
     refetchToday();
@@ -127,52 +147,19 @@ export default function ApiStats() {
   // 月份选项
   const monthOptions = Array.from({ length: 12 }, (_, i) => i + 1);
 
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-      {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-        <div className="container flex h-16 items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={() => setLocation("/")}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-600 to-cyan-500 flex items-center justify-center">
-                <Layers className="h-5 w-5 text-white" />
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground leading-none">鲲鹏产业源头创新中心</span>
-                <span className="font-semibold text-lg leading-tight">深圳湾 AI</span>
-              </div>
-            </div>
-          </div>
-          <nav className="flex items-center gap-4">
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/batch")}>
-              <Upload className="h-4 w-4 mr-2" />
-              批量查询
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/tasks")}>
-              <ListTodo className="h-4 w-4 mr-2" />
-              任务管理
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/reports")}>
-              <History className="h-4 w-4 mr-2" />
-              历史报告
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/park")}>
-              <Building2 className="h-4 w-4 mr-2" />
-              园区企业
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/settings")}>
-              <Settings className="h-4 w-4 mr-2" />
-              设置
-            </Button>
-          </nav>
-        </div>
-      </header>
+  if (isLoading) {
+    return null;
+  }
 
-      <main className="container py-8">
-        <div className="space-y-8">
+  if (!isAdmin) {
+    return null;
+  }
+
+  return (
+    <PageLayout>
+      <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
+        <main className="container py-8">
+          <div className="space-y-8">
           {/* Page Title */}
           <div className="flex items-center justify-between">
             <div>
@@ -547,8 +534,9 @@ export default function ApiStats() {
               </Card>
             </TabsContent>
           </Tabs>
-        </div>
-      </main>
-    </div>
+          </div>
+        </main>
+      </div>
+    </PageLayout>
   );
 }

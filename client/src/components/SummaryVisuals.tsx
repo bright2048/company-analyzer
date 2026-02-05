@@ -475,7 +475,6 @@ function CooperationAdvice({
   );
 }
 
-
 // ============================================================
 // 主组件
 // ============================================================
@@ -511,14 +510,45 @@ export function SummaryVisuals({
       return 0;
     };
 
+    const isValidName = (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) return false;
+      const invalidTokens = ["未知", "不详", "未披露", "无", "-", "/"];
+      return !invalidTokens.some(
+        token => trimmed === token || trimmed.includes(token)
+      );
+    };
+
+    const getNamedCount = (
+      data: { total: number; list: any[] } | any[] | undefined,
+      nameKeys: string[]
+    ): number => {
+      if (!data) return 0;
+      const list = Array.isArray(data) ? data : (data.list ?? []);
+      if (!Array.isArray(list)) return 0;
+      return list.filter(item => {
+        if (!item || typeof item !== "object") return false;
+        return nameKeys.some(key => {
+          const value = item[key];
+          return typeof value === "string" && isValidName(value);
+        });
+      }).length;
+    };
+
     const patentCount = getCount(info.patents);
     const trademarkCount = getCount(info.trademarks);
     const copyrightCount = getCount(info.copyrights);
     // 资质证书：优先用certificates，其次用certifications
     const certCount =
       getCount(info.certificates) || info.certifications?.length || 0;
-    const customerCount = getCount(info.customers);
-    const supplierCount = getCount(info.suppliers);
+    const customerCount = getNamedCount(info.customers, [
+      "CustomerName",
+      "Name",
+    ]);
+    const supplierCount = getNamedCount(info.suppliers, [
+      "SupplierName",
+      "Name",
+    ]);
 
     return {
       capital,
@@ -722,7 +752,7 @@ export function SummaryVisuals({
             <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
               <div className="flex items-center gap-2">
                 <Users className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">客户数：</span>
+                <span className="text-muted-foreground">客户数催眠：</span>
                 <span className="font-medium">{metrics.customerCount}</span>
               </div>
               <div className="flex items-center gap-2">

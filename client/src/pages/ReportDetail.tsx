@@ -192,31 +192,11 @@ export default function ReportDetail() {
     },
   });
 
-  const exportPdfMutation = trpc.report.exportPdf.useMutation({
-    onSuccess: data => {
-      window.open(data.url, "_blank");
-      toast.success("PDF文档已生成");
-    },
-    onError: error => {
-      toast.error("导出失败: " + error.message);
-    },
-  });
-
   // 缩略版导出mutation
   const exportSummaryWordMutation = trpc.report.exportSummaryWord.useMutation({
     onSuccess: data => {
       window.open(data.url, "_blank");
       toast.success("缩略版Word文档已生成");
-    },
-    onError: error => {
-      toast.error("导出失败: " + error.message);
-    },
-  });
-
-  const exportSummaryPdfMutation = trpc.report.exportSummaryPdf.useMutation({
-    onSuccess: data => {
-      window.open(data.url, "_blank");
-      toast.success("缩略版PDF文档已生成");
     },
     onError: error => {
       toast.error("导出失败: " + error.message);
@@ -355,21 +335,6 @@ export default function ReportDetail() {
                     </>
                   )}
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => exportPdfMutation.mutate({ id: reportId })}
-                  disabled={exportPdfMutation.isPending}
-                >
-                  {exportPdfMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Download className="h-4 w-4 mr-2" />
-                      完整版PDF
-                    </>
-                  )}
-                </Button>
                 {report.summaryContent && (
                   <>
                     <Button
@@ -386,23 +351,6 @@ export default function ReportDetail() {
                         <>
                           <FileCheck className="h-4 w-4 mr-2" />
                           摘要Word
-                        </>
-                      )}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        exportSummaryPdfMutation.mutate({ id: reportId })
-                      }
-                      disabled={exportSummaryPdfMutation.isPending}
-                    >
-                      {exportSummaryPdfMutation.isPending ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <FileCheck className="h-4 w-4 mr-2" />
-                          摘要PDF
                         </>
                       )}
                     </Button>

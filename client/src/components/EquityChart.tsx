@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Building2, User, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Image, FileText, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { Building2, User, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Image, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import html2canvas from 'html2canvas';
 
@@ -118,101 +118,188 @@ function countInvestmentRisks(items: InvestmentThroughItem[]): { risk: number; w
   return { risk, warning };
 }
 
-// 递归渲染股东树节点（带风险高亮）
-function EquityNode({ node, level = 0 }: { node: EquityThroughChild; level?: number }) {
-  const [expanded, setExpanded] = useState(level < 2);
-  const hasChildren = node.Children && node.Children.length > 0;
+function PyramidNode({ node }: { node: EquityThroughChild }) {
   const isCompany = node.Category === '0';
   const statusType = getStatusType(node.ShortStatus);
   const isRisk = statusType === 'risk';
   const isWarning = statusType === 'warning';
-  
-  // 根据风险状态设置样式
-  const getBorderColor = () => {
-    if (isRisk) return 'border-red-400 dark:border-red-600';
-    if (isWarning) return 'border-yellow-400 dark:border-yellow-600';
-    return 'border-gray-200 dark:border-gray-700';
-  };
-  
-  const getBackgroundColor = () => {
-    if (isRisk) return 'bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30';
-    if (isWarning) return 'bg-yellow-50 dark:bg-yellow-900/20 hover:bg-yellow-100 dark:hover:bg-yellow-900/30';
-    return 'hover:bg-gray-50 dark:hover:bg-gray-800';
-  };
-  
-  const getIconBackground = () => {
-    if (isRisk) return 'bg-red-100 dark:bg-red-900';
-    if (isWarning) return 'bg-yellow-100 dark:bg-yellow-900';
-    if (isCompany) return 'bg-blue-100 dark:bg-blue-900';
-    return 'bg-green-100 dark:bg-green-900';
-  };
-  
-  const getIconColor = () => {
-    if (isRisk) return 'text-red-600 dark:text-red-400';
-    if (isWarning) return 'text-yellow-600 dark:text-yellow-400';
-    if (isCompany) return 'text-blue-600 dark:text-blue-400';
-    return 'text-green-600 dark:text-green-400';
-  };
-  
+
+  const borderClass = isRisk
+    ? 'border-red-300 dark:border-red-700'
+    : isWarning
+      ? 'border-yellow-300 dark:border-yellow-700'
+      : 'border-gray-200 dark:border-gray-700';
+  const bgClass = isRisk
+    ? 'bg-red-50 dark:bg-red-900/20'
+    : isWarning
+      ? 'bg-yellow-50 dark:bg-yellow-900/20'
+      : 'bg-white dark:bg-gray-900';
+
   return (
-    <div className={`ml-4 border-l-2 ${getBorderColor()} pl-4 py-2`}>
-      <div 
-        className={`flex items-center gap-2 p-2 rounded-lg transition-colors ${getBackgroundColor()} ${hasChildren ? 'cursor-pointer' : ''}`}
-        onClick={() => hasChildren && setExpanded(!expanded)}
-      >
-        {hasChildren ? (
-          expanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />
-        ) : (
-          <div className="w-4" />
-        )}
-        
-        <div className={`p-2 rounded-full ${getIconBackground()}`}>
+    <div className={`w-[320px] max-w-full rounded-xl border ${borderClass} ${bgClass} p-3 shadow-sm`}>
+      <div className="flex items-start gap-2">
+        <div className={`p-2 rounded-full ${isRisk ? 'bg-red-100 dark:bg-red-900' : isWarning ? 'bg-yellow-100 dark:bg-yellow-900' : isCompany ? 'bg-blue-100 dark:bg-blue-900' : 'bg-green-100 dark:bg-green-900'}`}>
           {isRisk ? (
-            <ShieldAlert className={`w-4 h-4 ${getIconColor()}`} />
+            <ShieldAlert className="w-4 h-4 text-red-600 dark:text-red-400" />
           ) : isWarning ? (
-            <AlertTriangle className={`w-4 h-4 ${getIconColor()}`} />
+            <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />
           ) : isCompany ? (
-            <Building2 className={`w-4 h-4 ${getIconColor()}`} />
+            <Building2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
           ) : (
-            <User className={`w-4 h-4 ${getIconColor()}`} />
+            <User className="w-4 h-4 text-green-600 dark:text-green-400" />
           )}
         </div>
-        
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className={`font-medium text-sm truncate ${isRisk ? 'text-red-700 dark:text-red-300' : isWarning ? 'text-yellow-700 dark:text-yellow-300' : ''}`}>
-              {node.Name}
-            </span>
-            {node.ShortStatus && (
-              <Badge 
-                variant={isRisk ? 'destructive' : isWarning ? 'outline' : node.ShortStatus === '存续' ? 'default' : 'secondary'} 
-                className={`text-xs ${isWarning ? 'border-yellow-500 text-yellow-700 dark:text-yellow-300' : ''}`}
-              >
-                {isRisk && <ShieldAlert className="w-3 h-3 mr-1" />}
-                {isWarning && <AlertTriangle className="w-3 h-3 mr-1" />}
-                {node.ShortStatus}
-              </Badge>
-            )}
+        <div className="min-w-0">
+          <div className={`text-sm font-medium whitespace-normal break-words ${isRisk ? 'text-red-700 dark:text-red-300' : isWarning ? 'text-yellow-700 dark:text-yellow-300' : ''}`}>
+            {node.Name}
           </div>
-          <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 mt-1">
-            <span className={`font-medium ${isRisk ? 'text-red-600 dark:text-red-400' : isWarning ? 'text-yellow-600 dark:text-yellow-400' : 'text-blue-600 dark:text-blue-400'}`}>
-              持股 {node.FundedRatio}
-            </span>
-            {node.ShouldCapi && (
-              <span>认缴 {node.ShouldCapi}万</span>
-            )}
-            <span>第{node.Grade}层</span>
+          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            持股 {node.FundedRatio || '未知'}
           </div>
         </div>
       </div>
-      
-      {expanded && hasChildren && (
-        <div className="mt-1">
-          {node.Children!.map((child, index) => (
-            <EquityNode key={child.KeyNo || index} node={child} level={level + 1} />
+      {node.ShortStatus && (
+        <div className="mt-2">
+          <Badge
+            variant={isRisk ? 'destructive' : isWarning ? 'outline' : node.ShortStatus === '存续' ? 'default' : 'secondary'}
+            className={`text-xs ${isWarning ? 'border-yellow-500 text-yellow-700 dark:text-yellow-300' : ''}`}
+          >
+            {isRisk && <ShieldAlert className="w-3 h-3 mr-1" />}
+            {isWarning && <AlertTriangle className="w-3 h-3 mr-1" />}
+            {node.ShortStatus}
+          </Badge>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildNodeKey(node: EquityThroughChild) {
+  return node.KeyNo || `${node.Name}-${node.Grade}-${node.FundedRatio || '0'}`;
+}
+
+function EquityVerticalNode({
+  node,
+  depth,
+  maxDepth,
+  expandedMap,
+  toggleNode,
+}: {
+  node: EquityThroughChild;
+  depth: number;
+  maxDepth: number;
+  expandedMap: Record<string, boolean>;
+  toggleNode: (key: string) => void;
+}) {
+  const key = buildNodeKey(node);
+  const hasChildren = (node.Children?.length ?? 0) > 0;
+  const isExpanded = expandedMap[key] ?? depth < 3;
+  const canExpand = hasChildren && depth < maxDepth;
+
+  return (
+    <div className={`pl-8 border-l-2 border-gray-200 dark:border-gray-700`}>
+      <div className="relative">
+        <PyramidNode node={node} />
+        {canExpand && (
+          <button
+            type="button"
+            onClick={() => toggleNode(key)}
+            className="absolute -right-2 top-2 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[10px] text-gray-600 shadow-sm hover:bg-gray-50"
+          >
+            {isExpanded ? '收起' : '展开'}
+          </button>
+        )}
+      </div>
+      <div className="mt-2 inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+        <span className="rounded-full border border-gray-200 dark:border-gray-700 px-2 py-0.5">
+          第{depth}层
+        </span>
+        <span>{hasChildren ? `下级 ${node.Children?.length ?? 0} 个` : '无下级'}</span>
+      </div>
+      {canExpand && isExpanded && (
+        <div className="mt-3 space-y-3">
+          {node.Children!.map(child => (
+            <EquityVerticalNode
+              key={buildNodeKey(child)}
+              node={child}
+              depth={depth + 1}
+              maxDepth={maxDepth}
+              expandedMap={expandedMap}
+              toggleNode={toggleNode}
+            />
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function EquityVerticalTree({
+  roots,
+  maxDepth,
+}: {
+  roots: EquityThroughChild[] | null | undefined;
+  maxDepth: number;
+}) {
+  const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
+  const toggleNode = (key: string) => {
+    setExpandedMap(prev => ({ ...prev, [key]: !(prev[key] ?? true) }));
+  };
+  const nodes = useMemo(() => roots ?? [], [roots]);
+
+  if (nodes.length === 0) return null;
+
+  const setAll = (expanded: boolean) => {
+    const next: Record<string, boolean> = {};
+    const walk = (items: EquityThroughChild[] | null | undefined) => {
+      if (!items) return;
+      for (const item of items) {
+        next[buildNodeKey(item)] = expanded;
+        if (item.Children?.length) walk(item.Children);
+      }
+    };
+    walk(nodes);
+    setExpandedMap(next);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+        <div className="flex items-center gap-3">
+          {Array.from({ length: maxDepth }).map((_, idx) => (
+            <div key={idx} className="flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded-full border border-gray-300 dark:border-gray-600" />
+              <span>第{idx + 1}层</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setAll(true)}
+          >
+            展开全部
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setAll(false)}
+          >
+            收起全部
+          </Button>
+        </div>
+      </div>
+      {nodes.map(node => (
+        <EquityVerticalNode
+          key={buildNodeKey(node)}
+          node={node}
+          depth={1}
+          maxDepth={maxDepth}
+          expandedMap={expandedMap}
+          toggleNode={toggleNode}
+        />
+      ))}
     </div>
   );
 }
@@ -383,84 +470,7 @@ export function EquityChart({ equityThrough, investmentThrough, companyName }: E
     }
   };
   
-  // 导出为PDF
-  const exportToPdf = async (ref: React.RefObject<HTMLDivElement | null>, title: string) => {
-    if (!ref.current) return;
-    
-    try {
-      const printWindow = window.open('', '_blank');
-      if (!printWindow) {
-        toast.error('请允许弹出窗口以导出PDF');
-        return;
-      }
-      
-      const styles = Array.from(document.styleSheets)
-        .map(styleSheet => {
-          try {
-            return Array.from(styleSheet.cssRules)
-              .map(rule => rule.cssText)
-              .join('\n');
-          } catch {
-            return '';
-          }
-        })
-        .join('\n');
-      
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>${title} - ${companyName}</title>
-          <style>
-            ${styles}
-            body { 
-              padding: 20px; 
-              background: white;
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            }
-            .print-header {
-              text-align: center;
-              margin-bottom: 20px;
-              padding-bottom: 10px;
-              border-bottom: 2px solid #3b82f6;
-            }
-            .print-header h1 {
-              font-size: 24px;
-              color: #1f2937;
-              margin: 0 0 8px 0;
-            }
-            .print-header p {
-              font-size: 14px;
-              color: #6b7280;
-              margin: 0;
-            }
-            @media print {
-              body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="print-header">
-            <h1>${title}</h1>
-            <p>${companyName} | 生成时间：${new Date().toLocaleString()}</p>
-          </div>
-          ${ref.current.innerHTML}
-        </body>
-        </html>
-      `);
-      
-      printWindow.document.close();
-      
-      setTimeout(() => {
-        printWindow.print();
-      }, 500);
-      
-      toast.success('已打开打印窗口，请选择"另存为PDF"');
-    } catch (error) {
-      console.error('Export PDF error:', error);
-      toast.error('PDF导出失败');
-    }
-  };
+  // PDF 导出已移除
   
   if (!hasEquityData && !hasInvestmentData) {
     return (
@@ -525,36 +535,29 @@ export function EquityChart({ equityThrough, investmentThrough, companyName }: E
                   )}
                   导出PNG
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => exportToPdf(equityRef, '股权穿透图')}
-                >
-                  <FileText className="w-4 h-4 mr-1" />
-                  导出PDF
-                </Button>
               </div>
             </div>
           </CardHeader>
           <CardContent>
             <div ref={equityRef} className="bg-white p-4 rounded-lg">
-              {/* 目标企业 */}
-              <div className="flex items-center gap-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg mb-4">
-                <div className="p-2 rounded-full bg-blue-600">
-                  <Building2 className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <div className="font-bold text-lg">{companyName}</div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">查询目标企业</div>
-                </div>
-              </div>
-              
-              {/* 股东树 */}
-              <div className="border-l-4 border-blue-500 pl-2">
-                {equityThrough.Children!.map((child, index) => (
-                  <EquityNode key={child.KeyNo || index} node={child} level={0} />
-                ))}
-              </div>
+              <EquityVerticalTree
+                roots={[
+                  {
+                    KeyNo: equityThrough.KeyNo,
+                    Name: companyName,
+                    Category: "0",
+                    FundedRatio: "100%",
+                    InParentActualRadio: "",
+                    Count: equityThrough.Count,
+                    Grade: "0",
+                    ShouldCapi: "",
+                    StockRightNum: "",
+                    ShortStatus: "存续",
+                    Children: equityThrough.Children ?? [],
+                  },
+                ]}
+                maxDepth={4}
+              />
             </div>
           </CardContent>
         </Card>
@@ -597,14 +600,6 @@ export function EquityChart({ equityThrough, investmentThrough, companyName }: E
                     <Image className="w-4 h-4 mr-1" />
                   )}
                   导出PNG
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => exportToPdf(investmentRef, '对外投资穿透图')}
-                >
-                  <FileText className="w-4 h-4 mr-1" />
-                  导出PDF
                 </Button>
               </div>
             </div>

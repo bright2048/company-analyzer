@@ -105,7 +105,7 @@ import { invokeLLMWithProvider, getLLMProviders, getLLMProviderById, LLMProvider
 import type { Message } from "./_core/llm";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
-import { generateWordDocument, generatePdfDocument } from "./reportExport";
+import { generateWordDocument } from "./reportExport";
 import { logDb, logQcc, logLlm, logReport, logDebug } from "./logger";
 import { getCompanyFullInfo, callQichachaApi, type CompanyFullInfo } from "./services/qichacha";
 
@@ -928,49 +928,6 @@ export const appRouter = router({
         return { url: result.url };
       }),
 
-    // 导出缩略版PDF文档
-    exportSummaryPdf: publicProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
-        const report = await getCompanyReportById(input.id);
-        if (!report) throw new Error("报告不存在");
-        if (!report.summaryContent) throw new Error("缩略版报告内容为空");
-
-        const result = await generatePdfDocument({
-          companyName: report.companyName + "（摘要）",
-          reportContent: report.summaryContent,
-        });
-
-        return { url: result.url };
-      }),
-
-    // 导出报告PDF文档
-    exportPdf: publicProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
-        const report = await getCompanyReportById(input.id);
-        if (!report) throw new Error("报告不存在");
-        if (!report.reportContent) throw new Error("报告内容为空");
-
-        let parkAnalysis = undefined;
-        if (report.parkAnalysis) {
-          try {
-            parkAnalysis = JSON.parse(report.parkAnalysis);
-          } catch (e) {
-            console.error("Parse park analysis error:", e);
-          }
-        }
-
-        const result = await generatePdfDocument({
-          companyName: report.companyName,
-          reportContent: report.reportContent,
-          parkAnalysis,
-        });
-
-        await updateCompanyReport(input.id, { pdfFileUrl: result.url });
-        return { url: result.url };
-      }),
-
     // 创建报告（开始生成流程）- 创建后立即后台异步生成
     // 需要登录并检查额度
     create: protectedProcedure
@@ -1111,6 +1068,16 @@ export const appRouter = router({
       }))
       .mutation(async ({ input }) => {
         try {
+          const batchLimitRaw = await getSystemConfig("batch_query_max_count", "50");
+          const batchLimit = Number.parseInt(batchLimitRaw, 10);
+          const maxCount = Number.isFinite(batchLimit) ? batchLimit : 50;
+          if (maxCount <= 0) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "批量查询已禁用",
+            });
+          }
+
           // 解析CSV文件
           const buffer = Buffer.from(input.fileContent, "base64");
           const content = buffer.toString("utf-8");
@@ -1144,10 +1111,10 @@ export const appRouter = router({
             });
           }
 
-          if (companyNames.length > 50) {
+          if (companyNames.length > maxCount) {
             throw new TRPCError({
               code: "BAD_REQUEST",
-              message: `每次最多支持50个企业，当前文件包含${companyNames.length}个企业`,
+              message: `每次最多支持${maxCount}个企业，当前文件包含${companyNames.length}个企业`,
             });
           }
 
@@ -1667,7 +1634,7 @@ async function generateReportAsync(
       realCapital: companyFullInfo.basicInfo.RecCap,  // 实缴资本
       address: companyFullInfo.basicInfo.Address,
       scope: companyFullInfo.basicInfo.Scope,
-      industry: companyFullInfo.basicInfo.Industry,
+      industry: companyFullInfo.basicInfo.Industry || "暂无公开数据",
       // 股东和高管
       shareholders: companyFullInfo.shareholders,
       executives: companyFullInfo.executives,
@@ -1833,7 +1800,7 @@ async function generateCompanyReport(
 - 实缴资本：${info.RecCap}
 - 注册地址：${info.Address}
 - 经营范围：${info.Scope}
-- 所属行业：${info.Industry}
+- 所属行业：${info.Industry || "暂无公开数据"}
 `;
 
     // 股东信息
@@ -1923,19 +1890,21 @@ async function generateCompanyReport(
       });
     }
 
-    // 客户信息
+    // 客户信息（用于附录，需完整呈现）
     if (companyFullInfo.customers && companyFullInfo.customers.length > 0) {
-      qccDataSection += `\n**主要客户**（来源：招股书/年报）：\n`;
-      companyFullInfo.customers.slice(0, 10).forEach(c => {
-        qccDataSection += `- ${c.CustomerName}：销售占比${c.Ratio || '未知'}，金额${c.Amount || '未知'}（${c.Year || '未知'}年）\n`;
+      qccDataSection += `\n**主要客户清单（来源：招股书/年报，共${companyFullInfo.customers.length}家，附录需完整呈现）**：\n`;
+      qccDataSection += `| 客户名称 | 销售占比 | 销售金额 | 年度 |\n|---|---|---|---|\n`;
+      companyFullInfo.customers.forEach(c => {
+        qccDataSection += `| ${c.CustomerName || '未知'} | ${c.Ratio || '未知'} | ${c.Amount || '未知'} | ${c.Year || '未知'} |\n`;
       });
     }
 
-    // 供应商信息
+    // 供应商信息（用于附录，需完整呈现）
     if (companyFullInfo.suppliers && companyFullInfo.suppliers.length > 0) {
-      qccDataSection += `\n**主要供应商**（来源：招股书/年报）：\n`;
-      companyFullInfo.suppliers.slice(0, 10).forEach(s => {
-        qccDataSection += `- ${s.SupplierName}：采购占比${s.Ratio || '未知'}，金额${s.Amount || '未知'}（${s.Year || '未知'}年）\n`;
+      qccDataSection += `\n**主要供应商清单（来源：招股书/年报，共${companyFullInfo.suppliers.length}家，附录需完整呈现）**：\n`;
+      qccDataSection += `| 供应商名称 | 采购占比 | 采购金额 | 年度 |\n|---|---|---|---|\n`;
+      companyFullInfo.suppliers.forEach(s => {
+        qccDataSection += `| ${s.SupplierName || '未知'} | ${s.Ratio || '未知'} | ${s.Amount || '未知'} | ${s.Year || '未知'} |\n`;
       });
     }
 
@@ -2195,6 +2164,9 @@ async function generateCompanyReport(
 3. **数据来源标注**：统一在句末标注，格式为"（数据来源：XXX）"
 4. **时间节点**：关键信息必须标注时间节点，如"截至${reportDate}"
 5. **专业呈现**：使用表格、列表等结构化方式呈现数据，提升可读性
+6. **避免模板话术**：不要出现“本报告基于企查查工商数据、公司公开信息及园区企业名录……”等固定说明
+7. **禁用无效占位**：报告中禁止出现"undefined"或"（企查查未归类）"，遇到无法归类的数据请删除或用"暂无公开数据"替代
+8. **结尾禁止总结语**：不要出现“报告撰写完毕”“（全文约XX字）”等结尾说明
 
 **写作规范**：
 1. **专业表述**：
@@ -2450,6 +2422,12 @@ async function generateCompanyReport(
 - 扶持政策建议
 - 服务支持建议
 
+## 附录：客户与供应商清单（如有）
+**要求**：
+- 必须以表格完整呈现企查查提供的全部客户与供应商清单
+- 不得遗漏任何条目
+- 若无数据则写"暂无公开数据"
+
 ---
 
 **绝对禁止**：
@@ -2632,7 +2610,7 @@ async function generateSummaryReport(
 - 企业状态：${info.Status}
 - 成立日期：${info.StartDate}
 - 注册资本：${info.RegistCapi}
-- 所属行业：${info.Industry}
+- 所属行业：${info.Industry || "暂无公开数据"}
 `;
 
     // 添加知识产权摘要
@@ -2718,6 +2696,12 @@ async function generateSummaryReport(
       }
     }
 
+    // 添加客户/供应商数量摘要（按披露数量计）
+    const customerCount = companyFullInfo.customers?.length ?? 0;
+    const supplierCount = companyFullInfo.suppliers?.length ?? 0;
+    if (customerCount > 0 || supplierCount > 0) {
+      basicInfoSummary += `- 客户/供应商：客户${customerCount}家，供应商${supplierCount}家（按披露数量计）`;
+    }
 
   }
 
@@ -2784,7 +2768,8 @@ async function generateSummaryReport(
 - 不要包含过多细节，只保留核心信息
 - **风险提示必须详尽**，特别是法律诉讼、失信、经营异常、税务异常、股权冻结等
 - **特别关注法定代表人变更和注册地址变更**，这些是重要的风险信号
-- 评级要客观准确，基于数据而非主观判断`;
+- 评级要客观准确，基于数据而非主观判断
+- 如有客户/供应商数据，必须写明客户数与供应商数（按披露数量计，通常不超过10家）`;
 
   const userPrompt = `请基于以下完整报告内容，生成一份缩略版报告：
 

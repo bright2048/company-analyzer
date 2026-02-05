@@ -81,6 +81,17 @@ export const systemRouter = router({
       } as const;
     }),
 
+  getBatchQueryLimit: publicProcedure
+    .query(async () => {
+      const rawValue = await getSystemConfig("batch_query_max_count", "50");
+      const limit = Number.parseInt(rawValue, 10);
+      const normalized = Number.isFinite(limit) ? limit : 50;
+      return {
+        limit: normalized,
+        disabled: normalized <= 0,
+      };
+    }),
+
   // 获取日志配置
   getLogConfigs: adminProcedure
     .query(async () => {

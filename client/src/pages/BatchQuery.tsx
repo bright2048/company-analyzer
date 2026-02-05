@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { useLocation } from "wouter";
+import { PageLayout } from "@/components/PageLayout";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -30,7 +30,6 @@ import {
 } from "lucide-react";
 
 export default function BatchQuery() {
-  const [, setLocation] = useLocation();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -40,6 +39,10 @@ export default function BatchQuery() {
     { limit: 20, offset: 0 },
     { refetchInterval: 5000 } // 每5秒刷新一次
   );
+
+  const { data: batchLimitConfig } = trpc.system.getBatchQueryLimit.useQuery();
+  const batchLimit = batchLimitConfig?.limit ?? 50;
+  const isBatchDisabled = batchLimitConfig?.disabled ?? false;
 
   // 创建批量任务
   const createBatchMutation = trpc.batchTask.create.useMutation({
@@ -79,6 +82,10 @@ export default function BatchQuery() {
   };
 
   const handleUpload = async () => {
+    if (isBatchDisabled) {
+      toast.error("批量查询已禁用");
+      return;
+    }
     if (!selectedFile) {
       toast.error("请先选择CSV文件");
       return;
@@ -143,78 +150,17 @@ export default function BatchQuery() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-      {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-        <div className="container flex h-16 items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setLocation("/")}
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-600 to-cyan-500 flex items-center justify-center">
-                <Layers className="h-5 w-5 text-white" />
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground leading-none">
-                  鲲鹏产业源头创新中心
-                </span>
-                <span className="font-semibold text-lg leading-tight">
-                  鲲灵智谱
-                </span>
-              </div>
+    <PageLayout>
+      <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
+        <main className="container py-8">
+          <div className="max-w-4xl mx-auto space-y-8">
+            {/* Page Title */}
+            <div>
+              <h1 className="text-3xl font-bold">批量查询</h1>
+              <p className="text-muted-foreground mt-2">
+                上传CSV文件，一次性生成多个企业的分析报告（每次最多{batchLimit}个）
+              </p>
             </div>
-          </div>
-          <nav className="flex items-center gap-4">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/tasks")}
-            >
-              <FileText className="h-4 w-4 mr-2" />
-              任务管理
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/reports")}
-            >
-              <History className="h-4 w-4 mr-2" />
-              历史报告
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/park")}
-            >
-              <Building2 className="h-4 w-4 mr-2" />
-              园区企业
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/settings")}
-            >
-              <Settings className="h-4 w-4 mr-2" />
-              设置
-            </Button>
-          </nav>
-        </div>
-      </header>
-
-      <main className="container py-8">
-        <div className="max-w-4xl mx-auto space-y-8">
-          {/* Page Title */}
-          <div>
-            <h1 className="text-3xl font-bold">批量查询</h1>
-            <p className="text-muted-foreground mt-2">
-              上传CSV文件，一次性生成多个企业的分析报告（每次最多50个）
-            </p>
-          </div>
 
           {/* Upload Section */}
           <Card>
@@ -229,8 +175,16 @@ export default function BatchQuery() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div
-                className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
-                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                  isBatchDisabled
+                    ? "cursor-not-allowed opacity-50"
+                    : "cursor-pointer hover:border-primary/50"
+                }`}
+                onClick={() => {
+                  if (!isBatchDisabled) {
+                    fileInputRef.current?.click();
+                  }
+                }}
               >
                 <input
                   ref={fileInputRef}
@@ -239,6 +193,7 @@ export default function BatchQuery() {
                   onChange={handleFileSelect}
                   className="hidden"
                   aria-label="选择CSV文件上传"
+                  disabled={isBatchDisabled}
                 />
                 <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                 {selectedFile ? (
@@ -274,6 +229,7 @@ export default function BatchQuery() {
                 <Button
                   onClick={handleUpload}
                   disabled={
+                    isBatchDisabled ||
                     !selectedFile ||
                     isUploading ||
                     createBatchMutation.isPending
@@ -299,7 +255,11 @@ export default function BatchQuery() {
                 <div className="text-sm text-amber-800">
                   <p className="font-medium">注意事项</p>
                   <ul className="list-disc list-inside mt-1 space-y-1">
-                    <li>每次最多支持50个企业</li>
+                    {isBatchDisabled ? (
+                      <li>批量查询已禁用</li>
+                    ) : (
+                      <li>每次最多支持{batchLimit}个企业</li>
+                    )}
                     <li>报告将在后台自动生成，无需等待</li>
                     <li>
                       如果企业信息无法确认，系统会标记为失败，不会胡编乱造
@@ -411,8 +371,9 @@ export default function BatchQuery() {
               )}
             </CardContent>
           </Card>
-        </div>
-      </main>
-    </div>
+          </div>
+        </main>
+      </div>
+    </PageLayout>
   );
 }

@@ -11,9 +11,11 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import LogoPng from "@/assets/images/logo.png";
+import { useAuth } from "@/contexts/AuthContext";
 
 export function GlobalNavigation() {
   const [location, setLocation] = useLocation();
+  const { user } = useAuth();
 
   const navItems = [
     {
@@ -40,6 +42,7 @@ export function GlobalNavigation() {
       label: "API统计",
       icon: BarChart3,
       path: "/api-stats",
+      adminOnly: true,
     },
     {
       label: "设置",
@@ -52,6 +55,8 @@ export function GlobalNavigation() {
       path: "/user-center",
     },
   ];
+
+  const visibleNavItems = navItems.filter(item => !item.adminOnly || user?.role === "admin");
 
   return (
     <header className="border-b bg-background/95 backdrop-blur sticky top-0 z-50 shadow-sm">
@@ -75,7 +80,7 @@ export function GlobalNavigation() {
 
         {/* 导航菜单 */}
         <nav className="flex items-center gap-2">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = location === item.path;
 

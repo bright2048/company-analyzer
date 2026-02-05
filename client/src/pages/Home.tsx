@@ -162,26 +162,33 @@ export default function Home() {
 
   return (
     <PageLayout>
-      <div className="bg-gradient-to-b from-background to-muted/20">
+      <div className="bg-gradient-to-b from-slate-950/5 via-background to-muted/30">
         {/* 主内容区 */}
-      <main className="container py-8 md:py-16">
-        {/* 标题区域 */}
-        <div className="text-center mb-8 md:mb-12">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary/10 text-primary text-sm mb-4">
-            <Layers className="h-4 w-4" />
-            <span>深圳湾智能体 - 企业智能分析平台</span>
-          </div>
-          <h1 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">
-            企业调研报告<span className="text-primary">智能生成</span>
-          </h1>
-          <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-            输入公司名称，一键生成企业分析报告
-          </p>
-        </div>
+        <main className="container py-8 md:py-16">
+          <div className="relative">
+            <div className="pointer-events-none absolute inset-0 overflow-hidden">
+              <div className="absolute -top-24 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-cyan-500/20 blur-3xl animate-pulse" />
+              <div className="absolute top-16 right-8 h-80 w-80 rounded-full bg-blue-500/10 blur-3xl animate-pulse" />
+            </div>
 
-        {/* 搜索卡片 */}
-        <Card className="max-w-2xl mx-auto shadow-lg">
-          <CardContent className="pt-6">
+            <div className="relative z-10">
+              {/* 标题区域 */}
+              <div className="text-center mb-10 md:mb-14">
+                <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-primary/20 bg-primary/10 text-primary text-sm mb-5 shadow-sm">
+                  <Layers className="h-4 w-4" />
+                  <span>深圳湾智能体</span>
+                </div>
+                <h1 className="text-3xl md:text-6xl font-bold tracking-tight mb-4">
+                  一键生成<span className="text-primary">企业分析报告</span>
+                </h1>
+                <p className="text-muted-foreground text-base md:text-lg max-w-2xl mx-auto">
+                  输入公司名称，关键信息自动归集，洞察结论立即呈现
+                </p>
+              </div>
+
+          {/* 搜索卡片 */}
+          <Card className="max-w-2xl mx-auto shadow-xl border-primary/10">
+            <CardContent className="pt-6">
             {/* 搜索框 */}
             <div className="relative">
               <div className="flex gap-2">
@@ -189,7 +196,7 @@ export default function Home() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     ref={inputRef}
-                    placeholder="输入公司名称，如：华为技术有限公司"
+                    placeholder="输入公司名称，例如：华为技术有限公司"
                     value={companyName}
                     onChange={e => {
                       setCompanyName(e.target.value);
@@ -197,13 +204,13 @@ export default function Home() {
                     }}
                     onFocus={() => setShowSuggestions(true)}
                     onKeyPress={handleKeyPress}
-                    className="pl-10 h-12"
+                    className="pl-10 h-12 bg-background/80"
                   />
                 </div>
                 <Button
                   onClick={handleSearch}
                   disabled={createReportMutation.isPending}
-                  className="h-12 px-6"
+                  className="h-12 px-6 shadow-lg shadow-primary/20"
                 >
                   {createReportMutation.isPending ? (
                     <>
@@ -284,73 +291,75 @@ export default function Home() {
               )}
             </div>
 
-            {/* 批量查询提示 */}
-            <div className="mt-4 text-center text-sm text-muted-foreground">
-              需要批量查询？{" "}
-              <Button
-                variant="link"
-                className="p-0 h-auto"
-                onClick={() => setLocation("/batch")}
-              >
-                上传CSV文件批量生成报告
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              {/* 批量查询提示 */}
+              <div className="mt-4 text-center text-sm text-muted-foreground">
+                批量任务请{" "}
+                <Button
+                  variant="link"
+                  className="p-0 h-auto"
+                  onClick={() => setLocation("/batch")}
+                >
+                  上传 CSV
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
 
-        {/* 功能介绍卡片 */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-12 max-w-4xl mx-auto">
-          <Card className="text-center">
+              {/* 核心能力 */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-12 max-w-5xl mx-auto">
+            <Card className="text-center border-primary/10 shadow-sm">
             <CardHeader>
               <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-2">
                 <Search className="h-6 w-6 text-primary" />
               </div>
-              <CardTitle className="text-lg">智能信息搜索</CardTitle>
+              <CardTitle className="text-lg">多源信息聚合</CardTitle>
             </CardHeader>
             <CardContent>
               <CardDescription>
-                自动搜索整合公司工商信息、融资情况、专利数量等公开数据
+                工商、融资、专利等关键数据一次性汇总
               </CardDescription>
             </CardContent>
           </Card>
 
-          <Card className="text-center">
+            <Card className="text-center border-primary/10 shadow-sm">
             <CardHeader>
               <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-2">
                 <FileText className="h-6 w-6 text-primary" />
               </div>
-              <CardTitle className="text-lg">专业报告生成</CardTitle>
+              <CardTitle className="text-lg">结构化报告</CardTitle>
             </CardHeader>
             <CardContent>
               <CardDescription>
-                AI智能分析，生成包含发展历程、营收分析、风险提示等内容的专业报告
+                发展、财务、风险要点清晰呈现
               </CardDescription>
             </CardContent>
           </Card>
 
-          <Card className="text-center">
+            <Card className="text-center border-primary/10 shadow-sm">
             <CardHeader>
               <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-2">
                 <Building2 className="h-6 w-6 text-primary" />
               </div>
-              <CardTitle className="text-lg">园区匹配分析</CardTitle>
+              <CardTitle className="text-lg">园区协同分析</CardTitle>
             </CardHeader>
             <CardContent>
               <CardDescription>
-                自动分析目标企业与园区现有企业的上下游关系和合作可能性
+                识别上下游与合作机会
               </CardDescription>
             </CardContent>
           </Card>
-        </div>
-      </main>
+              </div>
+            </div>
+          </div>
+        </main>
 
-      {/* 页脚 */}
-      <footer className="border-t py-6 mt-auto">
-        <div className="container text-center text-sm text-muted-foreground">
-          <p>© 2025 鲲鹏产业源头创新中心 - 深圳湾 AI Insight System</p>
-          <p className="mt-1">企业智能分析平台 v6.0</p>
-        </div>
-      </footer>
+        {/* 页脚 */}
+        <footer className="border-t py-6 mt-auto">
+          <div className="container text-center text-sm text-muted-foreground">
+            <p>© 2025 鲲鹏产业源头创新中心 - 深圳湾智能体</p>
+            <p className="mt-1">企业智能分析平台 v6.0</p>
+          </div>
+        </footer>
       </div>
     </PageLayout>
   );

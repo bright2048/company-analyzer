@@ -14,6 +14,7 @@ import {
 } from "docx";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
+import { existsSync } from "node:fs";
 
 interface ReportData {
   companyName: string;
@@ -536,16 +537,50 @@ export async function generatePdfDocument(data: ReportData): Promise<{ url: stri
     </html>
   `;
 
-  // 使用html-pdf-node生成PDF
-  const htmlPdf = await import("html-pdf-node");
-  const options = { format: "A4" as const };
-  const file = { content: fullHtml };
-  
-  const pdfBuffer = await htmlPdf.default.generatePdf(file, options);
-  const fileKey = `reports/${nanoid()}-${data.companyName}.pdf`;
-  const result = await storagePut(fileKey, pdfBuffer, "application/pdf");
-  
-  return { url: result.url, key: fileKey };
+  // 使用puppeteer-core生成PDF，优先使用系统Chrome，避免下载Chromium
+  const puppeteer = await import("puppeteer-core");
+  const executablePath =
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    process.env.CHROME_PATH ||
+    [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+    ].find(candidate => existsSync(candidate));
+
+  if (!executablePath) {
+    throw new Error(
+      "未找到本机Chrome/Chromium，请安装Chrome或设置PUPPETEER_EXECUTABLE_PATH"
+    );
+  }
+
+  const browser = await puppeteer.default.launch({
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    executablePath,
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setContent(fullHtml, { waitUntil: "networkidle0" });
+    await page.emulateMediaType("screen");
+
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      margin: { top: "16mm", right: "16mm", bottom: "16mm", left: "16mm" },
+    });
+
+    const fileKey = `reports/${nanoid()}-${data.companyName}.pdf`;
+    const result = await storagePut(fileKey, pdfBuffer, "application/pdf");
+
+    return { url: result.url, key: fileKey };
+  } finally {
+    await browser.close();
+  }
 }
 
 // 简单的Markdown转HTML（支持表格）

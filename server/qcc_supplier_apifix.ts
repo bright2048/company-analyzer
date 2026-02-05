@@ -23,48 +23,81 @@ async function callQichachaSupplierApi(creditCode: string): Promise<QccSupplier[
     const paramName = apiConfig?.primaryParam || 'searchKey';
 
     try {
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const sign = generateQccSign(appKey, secretKey, timestamp);
+        const pageSize = 50;
+        let pageIndex = 1;
+        let totalRecords: number | null = null;
+        const allSuppliers: QccSupplier[] = [];
 
-        // 使用数据库配置的端点
-        const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}`;
+        while (true) {
+            const timestamp = Math.floor(Date.now() / 1000).toString();
+            const sign = generateQccSign(appKey, secretKey, timestamp);
 
-        const response = await fetch(url, {
-            headers: { 'Token': sign, 'Timespan': timestamp },
-        });
+            // 使用数据库配置的端点
+            const url = `${QCC_BASE_URL}/${endpoint}?key=${appKey}&${paramName}=${encodeURIComponent(creditCode)}&pageIndex=${pageIndex}&pageSize=${pageSize}`;
 
-        const data = await response.json();
+            const response = await fetch(url, {
+                headers: { 'Token': sign, 'Timespan': timestamp },
+            });
 
-        if (data.Status === '200' && data.Result && Array.isArray(data.Result.DistributorList)) {
-            // 修正：从 Result.DistributorList 中提取数据
-            const supplierList = data.Result.DistributorList.map((supplier: any) => ({
-                SupplierName: supplier.Name || '',      // 供应商名称对应 Name 字段
-                Ratio: supplier.PurchasePercent || '',  // 采购占比对应 PurchasePercent 字段
-                Amount: supplier.PurchaseAmount || '',  // 采购金额对应 PurchaseAmount 字段
-                Year: supplier.Year || '',              // 年份对应 Year 字段
-                DataSource: supplier.Source || ''       // 数据来源对应 Source 字段
-            }));
+            const data = await response.json();
+
+            if (data.Status === '200' && data.Result) {
+                if (pageIndex === 1) {
+                    const parsedTotal = Number(data.Result.TotalRecords);
+                    if (Number.isFinite(parsedTotal) && parsedTotal > 0) {
+                        totalRecords = parsedTotal;
+                    }
+                }
+
+                const supplierList = Array.isArray(data.Result.DistributorList)
+                    ? data.Result.DistributorList.map((supplier: any) => ({
+                        SupplierName: supplier.Name || '',      // 供应商名称对应 Name 字段
+                        Ratio: supplier.PurchasePercent || '',  // 采购占比对应 PurchasePercent 字段
+                        Amount: supplier.PurchaseAmount || '',  // 采购金额对应 PurchaseAmount 字段
+                        Year: supplier.Year || '',              // 年份对应 Year 字段
+                        DataSource: supplier.Source || ''       // 数据来源对应 Source 字段
+                    }))
+                    : [];
+
+                allSuppliers.push(...supplierList);
+
+                await recordApiCall({
+                    apiType: 'qichacha_supplier',
+                    apiName: apiConfig?.apiName || '供应商查询',
+                    status: 'success',
+                    cost: apiCost,
+                    requestParams: JSON.stringify({ creditCode, endpoint, pageIndex, pageSize }),
+                    responseSummary: JSON.stringify({
+                        count: supplierList.length,
+                        totalRecords: totalRecords ?? 0,
+                        pageIndex,
+                        pageSize,
+                    }),
+                });
+                const reachedEnd = totalRecords !== null
+                    ? allSuppliers.length >= totalRecords
+                    : supplierList.length < pageSize;
+
+                if (reachedEnd) {
+                    break;
+                }
+
+                pageIndex += 1;
+                continue;
+            }
 
             await recordApiCall({
                 apiType: 'qichacha_supplier',
                 apiName: apiConfig?.apiName || '供应商查询',
-                status: 'success',
+                status: 'failed',
                 cost: apiCost,
-                requestParams: JSON.stringify({ creditCode, endpoint }),
-                responseSummary: JSON.stringify({ count: supplierList.length }),
+                requestParams: JSON.stringify({ creditCode, endpoint, pageIndex, pageSize }),
+                errorMessage: data.Message || 'Unknown error',
             });
-            return supplierList;
+            return [];
         }
 
-        await recordApiCall({
-            apiType: 'qichacha_supplier',
-            apiName: apiConfig?.apiName || '供应商查询',
-            status: 'failed',
-            cost: apiCost,
-            requestParams: JSON.stringify({ creditCode, endpoint }),
-            errorMessage: data.Message || 'Unknown error',
-        });
-        return [];
+        return allSuppliers;
     } catch (error) {
         await recordApiCall({
             apiType: 'qichacha_supplier',

@@ -175,7 +175,7 @@ const versionHistory = [
       {
         icon: Download,
         title: "报告导出功能",
-        description: "支持将生成的报告导出为Word或PDF格式，方便分享和存档",
+        description: "支持将生成的报告导出为Word格式，方便分享和存档",
       },
     ],
   },
