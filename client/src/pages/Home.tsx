@@ -35,6 +35,7 @@ import {
   ArrowRight,
   Layers,
   Building,
+  Building2,
   Clock,
   FileText,
 } from "lucide-react";
