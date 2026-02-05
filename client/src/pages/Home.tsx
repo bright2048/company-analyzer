@@ -18,7 +18,6 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import LogoPng from "@/assets/images/logo.png";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -32,20 +31,13 @@ import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import {
   Search,
-  FileText,
-  Building2,
-  Settings,
-  History,
   Loader2,
   ArrowRight,
-  Upload,
   Layers,
   Building,
   Clock,
-  BarChart3,
-  User,
-  LogIn,
 } from "lucide-react";
+import { PageLayout } from "@/components/PageLayout";
 
 // ============================================================
 // 首页组件
@@ -167,81 +159,9 @@ export default function Home() {
   // ========== 渲染UI ==========
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-muted/20">
-      {/* 顶部导航栏 */}
-      <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-        <div className="container flex h-14 items-center justify-between">
-          {/* Logo和标题 */}
-          <div className="flex items-center gap-2">
-            <img src={LogoPng} alt="Logo" className="h-8 w-8 object-contain" />
-            {/* <Layers className="h-6 w-6 text-primary" /> */}
-            <span className="font-semibold text-lg">鲲鹏产业源头创新中心</span>
-            {/* <span className="text-muted-foreground text-lg hidden sm:inline">深圳湾 AI</span> */}
-          </div>
-
-          {/* 导航菜单 */}
-          <nav className="flex items-center gap-1 sm:gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/batch")}
-            >
-              <Upload className="h-4 w-4 mr-1 sm:mr-2" />
-              <span className="hidden sm:inline">批量查询</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/tasks")}
-            >
-              <FileText className="h-4 w-4 mr-1 sm:mr-2" />
-              <span className="hidden sm:inline">任务管理</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/reports")}
-            >
-              <History className="h-4 w-4 mr-1 sm:mr-2" />
-              <span className="hidden sm:inline">历史报告</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/park")}
-            >
-              <Building2 className="h-4 w-4 mr-1 sm:mr-2" />
-              <span className="hidden sm:inline">园区企业</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/api-stats")}
-            >
-              <BarChart3 className="h-4 w-4 mr-1 sm:mr-2" />
-              <span className="hidden sm:inline">API统计</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/settings")}
-            >
-              <Settings className="h-4 w-4 mr-1 sm:mr-2" />
-              <span className="hidden sm:inline">设置</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/user-center")}
-            >
-              <User className="h-4 w-4 mr-1 sm:mr-2" />
-              <span className="hidden sm:inline">用户</span>
-            </Button>
-          </nav>
-        </div>
-      </header>
-
-      {/* 主内容区 */}
+    <PageLayout>
+      <div className="bg-gradient-to-b from-background to-muted/20">
+        {/* 主内容区 */}
       <main className="container py-8 md:py-16">
         {/* 标题区域 */}
         <div className="text-center mb-8 md:mb-12">
@@ -429,6 +349,7 @@ export default function Home() {
           <p className="mt-1">企业智能分析平台 v6.0</p>
         </div>
       </footer>
-    </div>
+      </div>
+    </PageLayout>
   );
 }

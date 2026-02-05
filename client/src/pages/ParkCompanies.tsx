@@ -10,7 +10,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import {
-  ArrowLeft,
   Building2,
   Upload,
   Plus,
@@ -21,6 +20,7 @@ import {
   FileSpreadsheet,
   Download,
 } from "lucide-react";
+import { PageLayout } from "@/components/PageLayout";
 
 export default function ParkCompanies() {
   const [, setLocation] = useLocation();
@@ -173,23 +173,15 @@ export default function ParkCompanies() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b bg-background/95 backdrop-blur sticky top-0 z-50">
-        <div className="container flex h-16 items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => setLocation("/")}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-            <div>
-              <h1 className="font-semibold flex items-center gap-2">
-                <Building2 className="h-5 w-5" />
-                园区企业管理
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                共 {data?.total || 0} 家企业
-              </p>
-            </div>
+    <PageLayout
+      actionBar={
+        <>
+          <div className="flex items-center gap-2">
+            <Building2 className="h-5 w-5 text-primary" />
+            <h2 className="font-semibold">园区企业管理</h2>
+            <span className="text-sm text-muted-foreground">
+              共 {data?.total || 0} 家企业
+            </span>
           </div>
           <div className="flex items-center gap-3">
             <Button variant="outline" size="sm" onClick={downloadTemplate}>
@@ -282,9 +274,9 @@ export default function ParkCompanies() {
               </DialogContent>
             </Dialog>
           </div>
-        </div>
-      </header>
-
+        </>
+      }
+    >
       <main className="container py-8">
         {/* Search */}
         <div className="mb-6">
@@ -459,6 +451,6 @@ export default function ParkCompanies() {
           </DialogContent>
         </Dialog>
       </main>
-    </div>
+    </PageLayout>
   );
 }
