@@ -36,6 +36,7 @@ import {
   Layers,
   Building,
   Clock,
+  FileText,
 } from "lucide-react";
 import { PageLayout } from "@/components/PageLayout";
 
