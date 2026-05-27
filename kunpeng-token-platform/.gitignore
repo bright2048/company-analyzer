@@ -1,0 +1,31 @@
+# 二进制
+bin/
+*.exe
+
+# 环境配置
+.env
+
+# 前端构建产物
+static/
+
+# 前端依赖
+web/node_modules/
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 数据
+data/
+*.db
+
+# SSL证书
+deploy/ssl/
+
+# OS
+.DS_Store
+Thumbs.db
