@@ -30,13 +30,20 @@ func CORS(next http.Handler) http.Handler {
 	})
 }
 
-// AdminTokenAuth 客户管理令牌鉴权
+// AdminTokenAuth 客户管理令牌鉴权（支持X-Admin-Token和Authorization Bearer两种方式）
 func AdminTokenAuth(s store.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := r.Header.Get("X-Admin-Token")
 			if token == "" {
-				http.Error(w, `{"error":"missing X-Admin-Token header"}`, http.StatusUnauthorized)
+				// 也支持 Authorization: Bearer <token>
+				auth := r.Header.Get("Authorization")
+				if strings.HasPrefix(auth, "Bearer ") {
+					token = strings.TrimPrefix(auth, "Bearer ")
+				}
+			}
+			if token == "" {
+				http.Error(w, `{"error":"missing authentication"}`, http.StatusUnauthorized)
 				return
 			}
 			user, err := s.GetUserByAdminToken(r.Context(), token)

@@ -26,11 +26,17 @@ func Setup(s store.Store, cfg *config.Config) http.Handler {
 	userHandler := handler.NewUserHandler(s)
 	proxyHandler := handler.NewProxyHandler(proxyService)
 	adminHandler := handler.NewAdminHandler(s)
+	marketHandler := handler.NewMarketHandler(s)
 
 	// === 公开接口 ===
 	mux.HandleFunc("POST /api/v1/auth/register", userHandler.Register)
 	mux.HandleFunc("POST /api/v1/auth/login", userHandler.Login)
 	mux.HandleFunc("GET /api/v1/plans", userHandler.ListPlans)
+
+	// 模型超市（公开浏览）
+	mux.HandleFunc("GET /api/v1/market/products", marketHandler.ListProducts)
+	mux.HandleFunc("GET /api/v1/market/product", marketHandler.GetProductDetail)
+	mux.HandleFunc("GET /api/v1/market/filters", marketHandler.GetFilterOptions)
 
 	// 健康检查
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +56,11 @@ func Setup(s store.Store, cfg *config.Config) http.Handler {
 	mux.Handle("GET /api/v1/user/usage/summary", userAuth(http.HandlerFunc(userHandler.GetUsageSummary)))
 	mux.Handle("POST /api/v1/user/purchase", userAuth(http.HandlerFunc(userHandler.PurchasePlan)))
 	mux.Handle("POST /api/v1/user/coupon/redeem", userAuth(http.HandlerFunc(userHandler.RedeemCoupon)))
+
+	// 模型订购（需登录）
+	mux.Handle("POST /api/v1/market/subscribe", userAuth(http.HandlerFunc(marketHandler.Subscribe)))
+	mux.Handle("GET /api/v1/user/subscriptions", userAuth(http.HandlerFunc(marketHandler.ListSubscriptions)))
+	mux.Handle("GET /api/v1/user/subscription", userAuth(http.HandlerFunc(marketHandler.GetSubscriptionDetail)))
 
 	// === AI代理接口（需API Key鉴权） ===
 	apiKeyAuth := middleware.APIKeyAuth(s)
@@ -72,24 +83,33 @@ func Setup(s store.Store, cfg *config.Config) http.Handler {
 	mux.Handle("GET /api/admin/coupons", platformAuth(http.HandlerFunc(adminHandler.ListCoupons)))
 	mux.Handle("POST /api/admin/coupons", platformAuth(http.HandlerFunc(adminHandler.CreateCoupon)))
 
+	// 管理员 - 模型商品管理
+	mux.Handle("GET /api/admin/model-products", platformAuth(http.HandlerFunc(adminHandler.ListModelProducts)))
+	mux.Handle("POST /api/admin/model-products", platformAuth(http.HandlerFunc(adminHandler.CreateModelProduct)))
+	mux.Handle("PUT /api/admin/model-products", platformAuth(http.HandlerFunc(adminHandler.UpdateModelProduct)))
+	mux.Handle("DELETE /api/admin/model-products", platformAuth(http.HandlerFunc(adminHandler.DeleteModelProduct)))
+
+	// 管理员 - 模型套餐管理
+	mux.Handle("GET /api/admin/model-plans", platformAuth(http.HandlerFunc(adminHandler.ListModelPlans)))
+	mux.Handle("POST /api/admin/model-plans", platformAuth(http.HandlerFunc(adminHandler.CreateModelPlan)))
+	mux.Handle("PUT /api/admin/model-plans", platformAuth(http.HandlerFunc(adminHandler.UpdateModelPlan)))
+	mux.Handle("DELETE /api/admin/model-plans", platformAuth(http.HandlerFunc(adminHandler.DeleteModelPlan)))
+
 	// === 静态文件服务（前端SPA） ===
 	staticDir := cfg.StaticDir
 	if staticDir == "" {
 		staticDir = "./static"
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// API和v1路径不走静态文件
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/v1/") {
 			http.NotFound(w, r)
 			return
 		}
-		// 尝试提供静态文件
 		path := filepath.Join(staticDir, r.URL.Path)
 		if _, err := os.Stat(path); err == nil {
 			http.ServeFile(w, r, path)
 			return
 		}
-		// SPA fallback: 所有前端路由返回index.html
 		http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 	})
 

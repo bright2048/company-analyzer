@@ -27,12 +27,12 @@ export default function Login({ isAdmin }) {
 
       if (isRegister) {
         const data = await auth.register(email, password, company)
-        localStorage.setItem('kp_admin_token', data.admin_token)
+        localStorage.setItem('token', data.admin_token)
         localStorage.setItem('kp_user_email', email)
         navigate('/')
       } else {
         const data = await auth.login(email, password)
-        localStorage.setItem('kp_admin_token', data.admin_token)
+        localStorage.setItem('token', data.admin_token)
         localStorage.setItem('kp_user_email', data.email)
         navigate('/')
       }

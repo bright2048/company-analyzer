@@ -275,3 +275,166 @@ func (h *AdminHandler) CreateCoupon(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, coupon)
 }
+
+// ============================================================
+// 模型商品管理
+// ============================================================
+
+// ListModelProducts 模型商品列表
+func (h *AdminHandler) ListModelProducts(w http.ResponseWriter, r *http.Request) {
+	products, err := h.store.ListModelProducts(r.Context(), nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "list products failed"})
+		return
+	}
+	if products == nil {
+		products = []model.ModelProduct{}
+	}
+	writeJSON(w, http.StatusOK, products)
+}
+
+// CreateModelProduct 创建模型商品
+func (h *AdminHandler) CreateModelProduct(w http.ResponseWriter, r *http.Request) {
+	var product model.ModelProduct
+	if err := json.NewDecoder(r.Body).Decode(&product); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	if product.Name == "" || product.Provider == "" || product.ModelID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name, provider, model_id required"})
+		return
+	}
+
+	if product.ID == "" {
+		product.ID = generateID("mp")
+	}
+	if product.Status == "" {
+		product.Status = "active"
+	}
+	product.CreatedAt = time.Now()
+	product.UpdatedAt = time.Now()
+
+	if err := h.store.CreateModelProduct(r.Context(), &product); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "create product failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, product)
+}
+
+// UpdateModelProduct 更新模型商品
+func (h *AdminHandler) UpdateModelProduct(w http.ResponseWriter, r *http.Request) {
+	var product model.ModelProduct
+	if err := json.NewDecoder(r.Body).Decode(&product); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	if product.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+	product.UpdatedAt = time.Now()
+
+	if err := h.store.UpdateModelProduct(r.Context(), &product); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "update product failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, product)
+}
+
+// DeleteModelProduct 删除模型商品
+func (h *AdminHandler) DeleteModelProduct(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+	h.store.DeleteModelProduct(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
+}
+
+// ============================================================
+// 模型套餐管理
+// ============================================================
+
+// ListModelPlans 模型套餐列表
+func (h *AdminHandler) ListModelPlans(w http.ResponseWriter, r *http.Request) {
+	productID := r.URL.Query().Get("product_id")
+	if productID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "product_id required"})
+		return
+	}
+	plans, err := h.store.ListModelPlansByProduct(r.Context(), productID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "list plans failed"})
+		return
+	}
+	if plans == nil {
+		plans = []model.ModelPlan{}
+	}
+	writeJSON(w, http.StatusOK, plans)
+}
+
+// CreateModelPlan 创建模型套餐
+func (h *AdminHandler) CreateModelPlan(w http.ResponseWriter, r *http.Request) {
+	var plan model.ModelPlan
+	if err := json.NewDecoder(r.Body).Decode(&plan); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	if plan.ModelProductID == "" || plan.Name == "" || plan.BillingType == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model_product_id, name, billing_type required"})
+		return
+	}
+
+	if plan.ID == "" {
+		plan.ID = generateID("mplan")
+	}
+	if plan.Status == "" {
+		plan.Status = "active"
+	}
+	plan.CreatedAt = time.Now()
+
+	if err := h.store.CreateModelPlan(r.Context(), &plan); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "create plan failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, plan)
+}
+
+// UpdateModelPlan 更新模型套餐
+func (h *AdminHandler) UpdateModelPlan(w http.ResponseWriter, r *http.Request) {
+	var plan model.ModelPlan
+	if err := json.NewDecoder(r.Body).Decode(&plan); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	if plan.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+
+	if err := h.store.UpdateModelPlan(r.Context(), &plan); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "update plan failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, plan)
+}
+
+// DeleteModelPlan 删除模型套餐
+func (h *AdminHandler) DeleteModelPlan(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+	h.store.DeleteModelPlan(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
+}

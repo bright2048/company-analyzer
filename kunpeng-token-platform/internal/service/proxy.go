@@ -42,18 +42,32 @@ type StreamCallback func(data []byte) error
 
 // ChatCompletion 非流式代理调用（含路由、故障转移、计费）
 func (s *ProxyService) ChatCompletion(ctx context.Context, userID, apiKeyID string, req *model.ChatCompletionRequest) (*ProxyResult, error) {
-	// 1. 风控检查
-	if err := s.checkRisk(ctx, userID); err != nil {
+	// 1. 获取API Key关联的订阅信息
+	apiKey, err := s.store.GetAPIKeyByKey(ctx, "")
+	_ = apiKey
+
+	// 获取订阅（通过apiKeyID查找）
+	sub, _ := s.store.GetSubscriptionByAPIKey(ctx, apiKeyID)
+
+	// 2. 风控检查
+	if err := s.checkRisk(ctx, userID, sub); err != nil {
 		return nil, err
 	}
 
-	// 2. 获取可用供应商列表（按优先级排序）
-	suppliers, err := s.getActiveSuppliers(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("no available suppliers: %w", err)
+	// 3. 获取可用供应商列表（按模型商品筛选）
+	var suppliers []model.Supplier
+	if sub != nil && sub.ModelProductID != "" {
+		suppliers, err = s.store.ListSuppliersByModel(ctx, sub.ModelProductID)
+	}
+	if len(suppliers) == 0 {
+		// fallback: 获取所有活跃供应商
+		suppliers, err = s.getActiveSuppliers(ctx)
+	}
+	if err != nil || len(suppliers) == 0 {
+		return nil, fmt.Errorf("no available suppliers for model")
 	}
 
-	// 3. 依次尝试供应商（故障转移）
+	// 4. 依次尝试供应商（故障转移）
 	var lastErr error
 	maxRetries := 3
 	tried := 0
@@ -73,29 +87,40 @@ func (s *ProxyService) ChatCompletion(ctx context.Context, userID, apiKeyID stri
 		if err != nil {
 			lastErr = err
 			log.Printf("[PROXY] supplier %s failed: %v (latency: %dms)", supplier.ID, err, latency)
-			// 记录失败
-			s.recordUsage(ctx, userID, apiKeyID, supplier.ID, req.Model, 0, 0, 0, 0, 0, "failed", latency)
+			s.recordUsage(ctx, userID, apiKeyID, supplier.ID, req.Model, 0, 0, 0, 0, 0, "failed", latency, sub)
 			continue
 		}
 
-		// 4. 调用成功，计费扣费
+		// 5. 调用成功，计费扣费
 		usage := resp.Usage
 		if usage == nil {
 			usage = &model.ChatUsage{PromptTokens: 0, CompletionTokens: 0}
 		}
 
-		costFen := s.calculateCost(usage.PromptTokens, usage.CompletionTokens)
+		costFen := s.calculateCostForSubscription(sub, usage.PromptTokens, usage.CompletionTokens)
 		supplierCostFen := s.calculateSupplierCost(&supplier, usage.PromptTokens, usage.CompletionTokens, usage.CachedTokens)
 
-		// 扣费
-		if err := s.store.DebitWallet(ctx, userID, costFen); err != nil {
-			return nil, fmt.Errorf("debit wallet: %w", err)
+		// 扣费（按需模式从钱包扣，包量模式从配额扣）
+		if sub != nil && sub.BillingType != "on_demand" && sub.TokenQuota > 0 {
+			// 包量模式：扣Token配额
+			sub.TokenUsed += int64(usage.TotalTokens)
+			sub.TodayTokenUsed += int64(usage.TotalTokens)
+			s.store.UpdateSubscription(ctx, sub)
+		} else {
+			// 按需模式：从钱包扣费
+			if err := s.store.DebitWallet(ctx, userID, costFen); err != nil {
+				return nil, fmt.Errorf("debit wallet: %w", err)
+			}
+			if sub != nil {
+				sub.TotalCostFen += costFen
+				s.store.UpdateSubscription(ctx, sub)
+			}
 		}
 
-		// 记录成功
+		// 记录
 		s.recordUsage(ctx, userID, apiKeyID, supplier.ID, req.Model,
 			usage.PromptTokens, usage.CompletionTokens, usage.CachedTokens,
-			costFen, supplierCostFen, "success", latency)
+			costFen, supplierCostFen, "success", latency, sub)
 
 		log.Printf("[PROXY] success via %s, input=%d output=%d cost=%.2f元 latency=%dms",
 			supplier.ID, usage.PromptTokens, usage.CompletionTokens, float64(costFen)/100, latency)
@@ -112,15 +137,25 @@ func (s *ProxyService) ChatCompletion(ctx context.Context, userID, apiKeyID stri
 
 // ChatCompletionStream 流式代理调用
 func (s *ProxyService) ChatCompletionStream(ctx context.Context, userID, apiKeyID string, req *model.ChatCompletionRequest, callback StreamCallback) error {
+	// 获取订阅
+	sub, _ := s.store.GetSubscriptionByAPIKey(ctx, apiKeyID)
+
 	// 1. 风控检查
-	if err := s.checkRisk(ctx, userID); err != nil {
+	if err := s.checkRisk(ctx, userID, sub); err != nil {
 		return err
 	}
 
 	// 2. 获取可用供应商列表
-	suppliers, err := s.getActiveSuppliers(ctx)
-	if err != nil {
-		return fmt.Errorf("no available suppliers: %w", err)
+	var suppliers []model.Supplier
+	var err error
+	if sub != nil && sub.ModelProductID != "" {
+		suppliers, err = s.store.ListSuppliersByModel(ctx, sub.ModelProductID)
+	}
+	if len(suppliers) == 0 {
+		suppliers, err = s.getActiveSuppliers(ctx)
+	}
+	if err != nil || len(suppliers) == 0 {
+		return fmt.Errorf("no available suppliers for model")
 	}
 
 	// 3. 依次尝试供应商
@@ -176,19 +211,29 @@ func (s *ProxyService) ChatCompletionStream(ctx context.Context, userID, apiKeyI
 		// 5. 流结束后计费
 		usage := reader.Usage()
 		if usage == nil {
-			usage = &model.ChatUsage{PromptTokens: 50, CompletionTokens: 100} // 估算
+			usage = &model.ChatUsage{PromptTokens: 50, CompletionTokens: 100}
 		}
 
-		costFen := s.calculateCost(usage.PromptTokens, usage.CompletionTokens)
+		costFen := s.calculateCostForSubscription(sub, usage.PromptTokens, usage.CompletionTokens)
 		supplierCostFen := s.calculateSupplierCost(&supplier, usage.PromptTokens, usage.CompletionTokens, usage.CachedTokens)
 
 		// 扣费
-		s.store.DebitWallet(ctx, userID, costFen)
+		if sub != nil && sub.BillingType != "on_demand" && sub.TokenQuota > 0 {
+			sub.TokenUsed += int64(usage.TotalTokens)
+			sub.TodayTokenUsed += int64(usage.TotalTokens)
+			s.store.UpdateSubscription(ctx, sub)
+		} else {
+			s.store.DebitWallet(ctx, userID, costFen)
+			if sub != nil {
+				sub.TotalCostFen += costFen
+				s.store.UpdateSubscription(ctx, sub)
+			}
+		}
 
 		// 记录
 		s.recordUsage(ctx, userID, apiKeyID, supplier.ID, req.Model,
 			usage.PromptTokens, usage.CompletionTokens, usage.CachedTokens,
-			costFen, supplierCostFen, "success", latency)
+			costFen, supplierCostFen, "success", latency, sub)
 
 		log.Printf("[PROXY-STREAM] success via %s, input=%d output=%d cost=%.2f元 latency=%dms",
 			supplier.ID, usage.PromptTokens, usage.CompletionTokens, float64(costFen)/100, latency)
@@ -225,39 +270,70 @@ func (s *ProxyService) getActiveSuppliers(ctx context.Context) ([]model.Supplier
 }
 
 // checkRisk 风控检查
-func (s *ProxyService) checkRisk(ctx context.Context, userID string) error {
-	// 检查余额
-	wallet, err := s.store.GetWallet(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("wallet not found")
-	}
-	if wallet.Balance <= 0 {
-		return &RiskError{Code: 402, Message: "余额不足，请充值后再试"}
+func (s *ProxyService) checkRisk(ctx context.Context, userID string, sub *model.ModelSubscription) error {
+	// 包量模式：检查配额
+	if sub != nil && sub.BillingType != "on_demand" && sub.TokenQuota > 0 {
+		if sub.TokenUsed >= sub.TokenQuota {
+			return &RiskError{Code: 402, Message: "Token配额已用完，请升级套餐或续费"}
+		}
+		if sub.Status != "active" {
+			return &RiskError{Code: 403, Message: "订阅已过期或失效"}
+		}
+		if !sub.ExpiresAt.IsZero() && time.Now().After(sub.ExpiresAt) {
+			return &RiskError{Code: 403, Message: "订阅已过期，请续费"}
+		}
+	} else {
+		// 按需模式：检查余额
+		wallet, err := s.store.GetWallet(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("wallet not found")
+		}
+		if wallet.Balance <= 0 {
+			return &RiskError{Code: 402, Message: "余额不足，请充值后再试"}
+		}
 	}
 
 	// 检查每分钟请求数
 	count, _ := s.store.CountUserRequestsInMinute(ctx, userID)
-	if count >= 60 { // 默认60次/分钟
+	rateLimit := 60
+	if sub != nil && sub.BillingType == "on_demand" {
+		rateLimit = 30 // 按需模式限流更严
+	}
+	if count >= rateLimit {
 		return &RiskError{Code: 429, Message: "请求过于频繁，请稍后再试"}
 	}
 
 	// 检查每日消费上限
 	dailySpent, _ := s.store.GetUserDailySpent(ctx, userID)
-	if dailySpent >= 100000 { // 默认每日上限1000元
+	if dailySpent >= 100000 {
 		return &RiskError{Code: 429, Message: "已达每日消费上限"}
 	}
 
 	return nil
 }
 
-// calculateCost 计算用户侧费用（分）
-func (s *ProxyService) calculateCost(inputTokens, outputTokens int) int64 {
-	// 平台定价：元/百万Token -> 分/Token
-	inputCost := float64(inputTokens) * s.config.InputPriceFen / 1000000 * 100
-	outputCost := float64(outputTokens) * s.config.OutputPriceFen / 1000000 * 100
+// calculateCostForSubscription 基于订阅计算费用
+func (s *ProxyService) calculateCostForSubscription(sub *model.ModelSubscription, inputTokens, outputTokens int) int64 {
+	if sub != nil && sub.BillingType != "on_demand" && sub.TokenQuota > 0 {
+		// 包量模式：不额外收费（已预付）
+		return 0
+	}
+
+	// 按需模式：使用订阅的单价或平台默认单价
+	inputPrice := s.config.InputPriceFen
+	outputPrice := s.config.OutputPriceFen
+	if sub != nil && sub.OnDemandInputPrice > 0 {
+		inputPrice = sub.OnDemandInputPrice
+	}
+	if sub != nil && sub.OnDemandOutputPrice > 0 {
+		outputPrice = sub.OnDemandOutputPrice
+	}
+
+	inputCost := float64(inputTokens) * inputPrice / 1000000 * 100
+	outputCost := float64(outputTokens) * outputPrice / 1000000 * 100
 	total := int64(inputCost + outputCost)
 	if total < 1 && (inputTokens > 0 || outputTokens > 0) {
-		total = 1 // 最低1分
+		total = 1
 	}
 	return total
 }
@@ -278,11 +354,16 @@ func (s *ProxyService) calculateSupplierCost(supplier *model.Supplier, inputToke
 
 // recordUsage 记录调用
 func (s *ProxyService) recordUsage(ctx context.Context, userID, apiKeyID, supplierID, modelName string,
-	inputTokens, outputTokens, cachedTokens int, costFen, supplierCostFen int64, status string, latency int64) {
+	inputTokens, outputTokens, cachedTokens int, costFen, supplierCostFen int64, status string, latency int64, sub *model.ModelSubscription) {
+	subID := ""
+	if sub != nil {
+		subID = sub.ID
+	}
 	record := &model.UsageRecord{
 		ID:              fmt.Sprintf("usage-%d", time.Now().UnixNano()),
 		UserID:          userID,
 		APIKeyID:        apiKeyID,
+		SubscriptionID:  subID,
 		SupplierID:      supplierID,
 		Model:           modelName,
 		InputTokens:     inputTokens,

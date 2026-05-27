@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,44 +12,53 @@ import (
 
 // MemoryStore 内存存储实现
 type MemoryStore struct {
-	mu             sync.RWMutex
-	users          map[string]*model.User
-	usersByEmail   map[string]*model.User
-	usersByToken   map[string]*model.User
-	apiKeys        map[string]*model.APIKey
-	apiKeysByKey   map[string]*model.APIKey
-	wallets        map[string]*model.Wallet
-	suppliers      map[string]*model.Supplier
-	plans          map[string]*model.Plan
-	purchases      []model.Purchase
-	coupons        map[string]*model.Coupon
-	couponsByCode  map[string]*model.Coupon
-	couponUses     []model.CouponUseRecord
-	usageRecords   []model.UsageRecord
-	riskEvents     []model.RiskEvent
+	mu              sync.RWMutex
+	users           map[string]*model.User
+	usersByEmail    map[string]*model.User
+	usersByToken    map[string]*model.User
+	apiKeys         map[string]*model.APIKey
+	apiKeysByKey    map[string]*model.APIKey
+	wallets         map[string]*model.Wallet
+	modelProducts   map[string]*model.ModelProduct
+	modelPlans      map[string]*model.ModelPlan
+	subscriptions   map[string]*model.ModelSubscription
+	suppliers       map[string]*model.Supplier
+	plans           map[string]*model.Plan
+	purchases       []model.Purchase
+	coupons         map[string]*model.Coupon
+	couponsByCode   map[string]*model.Coupon
+	couponUses      []model.CouponUseRecord
+	usageRecords    []model.UsageRecord
+	riskEvents      []model.RiskEvent
 }
 
 // NewMemoryStore 创建内存存储
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		users:         make(map[string]*model.User),
-		usersByEmail:  make(map[string]*model.User),
-		usersByToken:  make(map[string]*model.User),
-		apiKeys:       make(map[string]*model.APIKey),
-		apiKeysByKey:  make(map[string]*model.APIKey),
-		wallets:       make(map[string]*model.Wallet),
-		suppliers:     make(map[string]*model.Supplier),
-		plans:         make(map[string]*model.Plan),
-		purchases:     make([]model.Purchase, 0),
-		coupons:       make(map[string]*model.Coupon),
-		couponsByCode: make(map[string]*model.Coupon),
-		couponUses:    make([]model.CouponUseRecord, 0),
-		usageRecords:  make([]model.UsageRecord, 0),
-		riskEvents:    make([]model.RiskEvent, 0),
+		users:          make(map[string]*model.User),
+		usersByEmail:   make(map[string]*model.User),
+		usersByToken:   make(map[string]*model.User),
+		apiKeys:        make(map[string]*model.APIKey),
+		apiKeysByKey:   make(map[string]*model.APIKey),
+		wallets:        make(map[string]*model.Wallet),
+		modelProducts:  make(map[string]*model.ModelProduct),
+		modelPlans:     make(map[string]*model.ModelPlan),
+		subscriptions:  make(map[string]*model.ModelSubscription),
+		suppliers:      make(map[string]*model.Supplier),
+		plans:          make(map[string]*model.Plan),
+		purchases:      make([]model.Purchase, 0),
+		coupons:        make(map[string]*model.Coupon),
+		couponsByCode:  make(map[string]*model.Coupon),
+		couponUses:     make([]model.CouponUseRecord, 0),
+		usageRecords:   make([]model.UsageRecord, 0),
+		riskEvents:     make([]model.RiskEvent, 0),
 	}
 }
 
+// ============================================================
 // User operations
+// ============================================================
+
 func (m *MemoryStore) CreateUser(ctx context.Context, user *model.User) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -115,7 +125,10 @@ func (m *MemoryStore) ListUsers(ctx context.Context) ([]model.UserDetail, error)
 	return result, nil
 }
 
+// ============================================================
 // API Key operations
+// ============================================================
+
 func (m *MemoryStore) CreateAPIKey(ctx context.Context, key *model.APIKey) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -163,7 +176,10 @@ func (m *MemoryStore) DeleteAPIKey(ctx context.Context, id string) error {
 	return nil
 }
 
+// ============================================================
 // Wallet operations
+// ============================================================
+
 func (m *MemoryStore) GetWallet(ctx context.Context, userID string) (*model.Wallet, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -208,13 +224,251 @@ func (m *MemoryStore) DebitWallet(ctx context.Context, userID string, amountFen 
 	return nil
 }
 
+// ============================================================
+// Model Product operations (模型商品)
+// ============================================================
+
+func (m *MemoryStore) ListModelProducts(ctx context.Context, filter *model.ModelFilter) ([]model.ModelProduct, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []model.ModelProduct
+	for _, p := range m.modelProducts {
+		if p.Status != "active" && p.Status != "coming_soon" {
+			continue
+		}
+		// 分类筛选
+		if filter != nil && filter.Category != "" && p.Category != filter.Category {
+			continue
+		}
+		// 厂商筛选
+		if filter != nil && filter.Provider != "" && p.ProviderKey != filter.Provider {
+			continue
+		}
+		// 场景筛选
+		if filter != nil && filter.Scene != "" {
+			found := false
+			for _, s := range p.Scenes {
+				if s == filter.Scene {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		// 价格区间筛选
+		if filter != nil && filter.PriceRange != "" {
+			switch filter.PriceRange {
+			case "free":
+				if p.InputPricePerMillion > 0 {
+					continue
+				}
+			case "low":
+				if p.InputPricePerMillion > 2.0 {
+					continue
+				}
+			case "medium":
+				if p.InputPricePerMillion <= 2.0 || p.InputPricePerMillion > 10.0 {
+					continue
+				}
+			case "high":
+				if p.InputPricePerMillion <= 10.0 {
+					continue
+				}
+			}
+		}
+		// 关键词搜索
+		if filter != nil && filter.Search != "" {
+			search := strings.ToLower(filter.Search)
+			if !strings.Contains(strings.ToLower(p.Name), search) &&
+				!strings.Contains(strings.ToLower(p.Provider), search) &&
+				!strings.Contains(strings.ToLower(p.Description), search) {
+				continue
+			}
+		}
+		result = append(result, *p)
+	}
+	// 排序
+	if filter != nil && filter.SortBy != "" {
+		sortProducts(result, filter.SortBy)
+	}
+	return result, nil
+}
+
+func sortProducts(products []model.ModelProduct, sortBy string) {
+	// 简单排序实现
+	n := len(products)
+	for i := 0; i < n-1; i++ {
+		for j := 0; j < n-i-1; j++ {
+			swap := false
+			switch sortBy {
+			case "price_asc":
+				swap = products[j].InputPricePerMillion > products[j+1].InputPricePerMillion
+			case "price_desc":
+				swap = products[j].InputPricePerMillion < products[j+1].InputPricePerMillion
+			case "quality":
+				swap = products[j].ScoreQuality < products[j+1].ScoreQuality
+			case "speed":
+				swap = products[j].ScoreSpeed < products[j+1].ScoreSpeed
+			case "popular":
+				swap = products[j].SortOrder > products[j+1].SortOrder
+			}
+			if swap {
+				products[j], products[j+1] = products[j+1], products[j]
+			}
+		}
+	}
+}
+
+func (m *MemoryStore) GetModelProduct(ctx context.Context, id string) (*model.ModelProduct, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if p, ok := m.modelProducts[id]; ok {
+		return p, nil
+	}
+	return nil, fmt.Errorf("model product not found")
+}
+
+func (m *MemoryStore) CreateModelProduct(ctx context.Context, product *model.ModelProduct) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.modelProducts[product.ID] = product
+	return nil
+}
+
+func (m *MemoryStore) UpdateModelProduct(ctx context.Context, product *model.ModelProduct) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.modelProducts[product.ID] = product
+	return nil
+}
+
+func (m *MemoryStore) DeleteModelProduct(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.modelProducts, id)
+	return nil
+}
+
+// ============================================================
+// Model Plan operations (模型套餐)
+// ============================================================
+
+func (m *MemoryStore) ListModelPlansByProduct(ctx context.Context, productID string) ([]model.ModelPlan, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []model.ModelPlan
+	for _, p := range m.modelPlans {
+		if p.ModelProductID == productID && p.Status == "active" {
+			result = append(result, *p)
+		}
+	}
+	return result, nil
+}
+
+func (m *MemoryStore) GetModelPlan(ctx context.Context, id string) (*model.ModelPlan, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if p, ok := m.modelPlans[id]; ok {
+		return p, nil
+	}
+	return nil, fmt.Errorf("model plan not found")
+}
+
+func (m *MemoryStore) CreateModelPlan(ctx context.Context, plan *model.ModelPlan) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.modelPlans[plan.ID] = plan
+	return nil
+}
+
+func (m *MemoryStore) UpdateModelPlan(ctx context.Context, plan *model.ModelPlan) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.modelPlans[plan.ID] = plan
+	return nil
+}
+
+func (m *MemoryStore) DeleteModelPlan(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.modelPlans, id)
+	return nil
+}
+
+// ============================================================
+// Model Subscription operations (模型订阅)
+// ============================================================
+
+func (m *MemoryStore) CreateSubscription(ctx context.Context, sub *model.ModelSubscription) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.subscriptions[sub.ID] = sub
+	return nil
+}
+
+func (m *MemoryStore) GetSubscription(ctx context.Context, id string) (*model.ModelSubscription, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if s, ok := m.subscriptions[id]; ok {
+		return s, nil
+	}
+	return nil, fmt.Errorf("subscription not found")
+}
+
+func (m *MemoryStore) GetSubscriptionByAPIKey(ctx context.Context, apiKeyID string) (*model.ModelSubscription, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, s := range m.subscriptions {
+		if s.APIKeyID == apiKeyID {
+			return s, nil
+		}
+	}
+	return nil, fmt.Errorf("subscription not found")
+}
+
+func (m *MemoryStore) ListSubscriptionsByUser(ctx context.Context, userID string) ([]model.ModelSubscription, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []model.ModelSubscription
+	for _, s := range m.subscriptions {
+		if s.UserID == userID {
+			result = append(result, *s)
+		}
+	}
+	return result, nil
+}
+
+func (m *MemoryStore) UpdateSubscription(ctx context.Context, sub *model.ModelSubscription) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.subscriptions[sub.ID] = sub
+	return nil
+}
+
+// ============================================================
 // Supplier operations
+// ============================================================
+
 func (m *MemoryStore) ListSuppliers(ctx context.Context) ([]model.Supplier, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var result []model.Supplier
 	for _, s := range m.suppliers {
 		result = append(result, *s)
+	}
+	return result, nil
+}
+
+func (m *MemoryStore) ListSuppliersByModel(ctx context.Context, modelProductID string) ([]model.Supplier, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []model.Supplier
+	for _, s := range m.suppliers {
+		if s.ModelProductID == modelProductID && s.Status == "active" {
+			result = append(result, *s)
+		}
 	}
 	return result, nil
 }
@@ -249,7 +503,10 @@ func (m *MemoryStore) DeleteSupplier(ctx context.Context, id string) error {
 	return nil
 }
 
-// Plan operations
+// ============================================================
+// Plan operations (充值包)
+// ============================================================
+
 func (m *MemoryStore) ListPlans(ctx context.Context, includeDisabled bool) ([]model.Plan, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -293,7 +550,10 @@ func (m *MemoryStore) DeletePlan(ctx context.Context, id string) error {
 	return nil
 }
 
+// ============================================================
 // Purchase operations
+// ============================================================
+
 func (m *MemoryStore) CreatePurchase(ctx context.Context, purchase *model.Purchase) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -325,7 +585,10 @@ func (m *MemoryStore) CountUserPurchasesForPlan(ctx context.Context, userID, pla
 	return count, nil
 }
 
+// ============================================================
 // Coupon operations
+// ============================================================
+
 func (m *MemoryStore) ListCoupons(ctx context.Context) ([]model.Coupon, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -406,7 +669,10 @@ func (m *MemoryStore) CreateCouponUseRecord(ctx context.Context, record *model.C
 	return nil
 }
 
+// ============================================================
 // Usage operations
+// ============================================================
+
 func (m *MemoryStore) CreateUsageRecord(ctx context.Context, record *model.UsageRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -475,7 +741,10 @@ func (m *MemoryStore) GetAdminOverview(ctx context.Context) (*model.AdminOvervie
 	return overview, nil
 }
 
+// ============================================================
 // Risk operations
+// ============================================================
+
 func (m *MemoryStore) CreateRiskEvent(ctx context.Context, event *model.RiskEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

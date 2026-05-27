@@ -27,14 +27,36 @@ type Store interface {
 	CreditWallet(ctx context.Context, userID string, amountFen int64) error
 	DebitWallet(ctx context.Context, userID string, amountFen int64) error
 
+	// Model Product (模型商品)
+	ListModelProducts(ctx context.Context, filter *model.ModelFilter) ([]model.ModelProduct, error)
+	GetModelProduct(ctx context.Context, id string) (*model.ModelProduct, error)
+	CreateModelProduct(ctx context.Context, product *model.ModelProduct) error
+	UpdateModelProduct(ctx context.Context, product *model.ModelProduct) error
+	DeleteModelProduct(ctx context.Context, id string) error
+
+	// Model Plan (模型套餐)
+	ListModelPlansByProduct(ctx context.Context, productID string) ([]model.ModelPlan, error)
+	GetModelPlan(ctx context.Context, id string) (*model.ModelPlan, error)
+	CreateModelPlan(ctx context.Context, plan *model.ModelPlan) error
+	UpdateModelPlan(ctx context.Context, plan *model.ModelPlan) error
+	DeleteModelPlan(ctx context.Context, id string) error
+
+	// Model Subscription (模型订阅)
+	CreateSubscription(ctx context.Context, sub *model.ModelSubscription) error
+	GetSubscription(ctx context.Context, id string) (*model.ModelSubscription, error)
+	GetSubscriptionByAPIKey(ctx context.Context, apiKeyID string) (*model.ModelSubscription, error)
+	ListSubscriptionsByUser(ctx context.Context, userID string) ([]model.ModelSubscription, error)
+	UpdateSubscription(ctx context.Context, sub *model.ModelSubscription) error
+
 	// Supplier
 	ListSuppliers(ctx context.Context) ([]model.Supplier, error)
+	ListSuppliersByModel(ctx context.Context, modelProductID string) ([]model.Supplier, error)
 	GetSupplier(ctx context.Context, id string) (*model.Supplier, error)
 	CreateSupplier(ctx context.Context, supplier *model.Supplier) error
 	UpdateSupplier(ctx context.Context, supplier *model.Supplier) error
 	DeleteSupplier(ctx context.Context, id string) error
 
-	// Plan
+	// Plan (充值包，保留兼容)
 	ListPlans(ctx context.Context, includeDisabled bool) ([]model.Plan, error)
 	GetPlan(ctx context.Context, id string) (*model.Plan, error)
 	CreatePlan(ctx context.Context, plan *model.Plan) error

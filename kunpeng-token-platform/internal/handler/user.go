@@ -171,14 +171,13 @@ func (h *UserHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiKey := &model.APIKey{
-		ID:         generateID("key"),
-		UserID:     userID,
-		Key:        generateToken("sk-kp"),
-		Name:       req.Name,
-		DailyLimit: req.DailyLimit,
-		RateLimit:  req.RateLimit,
-		Status:     "active",
-		CreatedAt:  time.Now(),
+		ID:        generateID("key"),
+		UserID:    userID,
+		Key:       generateToken("sk-kp"),
+		Name:      req.Name,
+		RateLimit: req.RateLimit,
+		Status:    "active",
+		CreatedAt: time.Now(),
 	}
 
 	if err := h.store.CreateAPIKey(r.Context(), apiKey); err != nil {
